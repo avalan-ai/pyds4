@@ -1,0 +1,9 @@
+specs/
+.venv/
+.local/
+.pytest_cache/
+dist/
+*.sw[mnop]
+build/
+__pycache__/
+*.py[cod]

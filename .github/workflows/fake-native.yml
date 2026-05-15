@@ -1,0 +1,37 @@
+name: fake-native
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install fake-native test build
+        run: |
+          python -m pip install --upgrade pip
+          PYDS4_USE_FAKE_DS4=1 PYDS4_BACKEND=cpu python -m pip install -e '.[test]'
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Run native C++ tests
+        run: make test-cpp
+
+      - name: Run native C++ sanitizer tests
+        run: make test-cpp-sanitizers
