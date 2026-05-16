@@ -22,7 +22,13 @@ from .errors import (
     Ds4InvalidModel,
     Ds4LoadError,
 )
-from .types import EngineOptions, ProgressEvent, SamplingOptions, ThinkMode
+from .types import (
+    EngineOptions,
+    ProgressEvent,
+    SamplingOptions,
+    ThinkMode,
+    TokenScore,
+)
 
 _native: ModuleType | None
 try:
@@ -233,6 +239,63 @@ def _validate_bytes_input(name: str, value: object) -> bytes:
     if not isinstance(value, bytes):
         raise TypeError(f"{name} must be bytes.")
     return value
+
+
+def _validate_logprob_result(operation: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned non-numeric logprob."
+        )
+    result = float(value)
+    if not isfinite(result):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned non-finite logprob."
+        )
+    return result
+
+
+def _validate_token_score(operation: str, value: object) -> TokenScore:
+    token_id: object
+    logprob: object
+    if isinstance(value, TokenScore):
+        token_id = value.token_id
+        logprob = value.logprob
+    elif isinstance(value, dict):
+        token_id = value.get("token_id", value.get("id"))
+        logprob = value.get("logprob")
+    elif isinstance(value, (list, tuple)):
+        if len(value) >= 3:
+            token_id = value[0]
+            logprob = value[2]
+        elif len(value) >= 2:
+            token_id = value[0]
+            logprob = value[1]
+        else:
+            token_id = None
+            logprob = None
+    else:
+        token_id = getattr(value, "token_id", getattr(value, "id", None))
+        logprob = getattr(value, "logprob", None)
+
+    if not _is_token_id(token_id):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned invalid token id."
+        )
+    return TokenScore(
+        token_id=token_id,
+        logprob=_validate_logprob_result(operation, logprob),
+    )
+
+
+def _validate_token_scores_result(
+    operation: str,
+    value: object,
+) -> list[TokenScore]:
+    if not isinstance(value, (list, tuple)):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned non-list token scores."
+        )
+    return [_validate_token_score(operation, item) for item in value]
 
 
 def _generation_exception(
@@ -835,6 +898,37 @@ class Session:
             raise
         except RuntimeError as error:
             raise _generation_exception("sample", error) from error
+
+    def token_logprob(self, token_id: int) -> float:
+        _validate_token_id("token_id", token_id)
+        try:
+            return _validate_logprob_result(
+                "token_logprob",
+                self._require_state().token_logprob(token_id),
+            )
+        except Ds4Error:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("token_logprob", error) from error
+
+    def top_logprobs(self, k: int) -> list[TokenScore]:
+        top_k = _validate_non_negative_int("k", k)
+        try:
+            state = self._require_state()
+            if top_k == 0:
+                return []
+            return _validate_token_scores_result(
+                "top_logprobs",
+                state.top_logprobs(top_k),
+            )
+        except Ds4Error:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("top_logprobs", error) from error
 
     def rewind(self, pos: int) -> None:
         _validate_non_negative_int("pos", pos)

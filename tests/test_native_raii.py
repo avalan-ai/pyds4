@@ -51,8 +51,8 @@ def test_fake_native_capabilities_match_bound_runtime_surface() -> None:
     assert caps.mtp is True
     assert caps.snapshots is True
     assert caps.payloads is True
-    assert caps.logprobs is False
-    assert caps.top_logprobs is False
+    assert caps.logprobs is True
+    assert caps.top_logprobs is True
     assert caps.speculative_eval is False
     assert counters()["engine_open_calls"] == 0
     assert counters()["session_create_calls"] == 0
@@ -347,6 +347,132 @@ def test_sample_preserves_rng_state_until_sync_resets_stream() -> None:
 
     assert session.sample(sampling) == first
     assert counters()["sample_calls"] == 4
+
+    session.close()
+    engine.close()
+
+
+def test_top_logprobs_return_stable_sorted_token_scores() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1, 2])
+
+    scores = session.top_logprobs(3)
+
+    assert scores == [
+        pyds4.TokenScore(token_id=1000 + ord("A"), logprob=-0.25),
+        pyds4.TokenScore(token_id=1000 + ord("B"), logprob=-1.25),
+        pyds4.TokenScore(token_id=1000 + ord("C"), logprob=-2.25),
+    ]
+    assert counters()["top_logprobs_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+def test_token_logprob_can_be_requested_before_eval() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1, 2])
+
+    token_id = session.argmax()
+    assert token_id == 1000 + ord("A")
+    assert session.token_logprob(token_id) == -0.25
+    assert session.pos == 2
+
+    session.eval(token_id)
+    assert session.pos == 3
+    assert counters()["token_logprob_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("k", [False, -1, 1.5])
+def test_top_logprobs_rejects_invalid_k_before_native_call(
+    k: object,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises((TypeError, ValueError)):
+        session.top_logprobs(k)  # type: ignore[arg-type]
+
+    assert counters()["top_logprobs_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("token_id", [True, -1, 1.5])
+def test_token_logprob_rejects_invalid_token_ids_before_native_call(
+    token_id: object,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises((TypeError, ValueError)):
+        session.token_logprob(token_id)  # type: ignore[arg-type]
+
+    assert counters()["token_logprob_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("method_name", ["top_logprobs", "token_logprob"])
+def test_logprob_methods_require_ready_logits(method_name: str) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+
+    with pytest.raises(
+        pyds4.Ds4GenerationError,
+        match="no synchronized prompt or evaluated token",
+    ):
+        if method_name == "top_logprobs":
+            session.top_logprobs(1)
+        else:
+            session.token_logprob(1000 + ord("A"))
+
+    counts = counters()
+    assert counts["top_logprobs_calls"] == 0
+    assert counts["token_logprob_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_malformed_top_logprobs_raise_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+    monkeypatch.setenv("PYDS4_FAKE_MALFORMED_TOP_LOGPROBS", "1")
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="malformed"):
+        session.top_logprobs(1)
+
+    assert counters()["top_logprobs_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+def test_malformed_token_logprob_raises_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+    monkeypatch.setenv("PYDS4_FAKE_MALFORMED_TOKEN_LOGPROB", "1")
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="malformed"):
+        session.token_logprob(1000 + ord("A"))
+
+    assert counters()["token_logprob_calls"] == 1
 
     session.close()
     engine.close()

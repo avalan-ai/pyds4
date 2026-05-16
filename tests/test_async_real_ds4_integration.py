@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from math import isfinite
 
 from _real_ds4_profiles import real_ds4_settings
 
@@ -50,7 +51,20 @@ def test_async_real_ds4_generation_smoke() -> None:
                 assert await session.pos == len(single_turn)
                 assert await session.tokens == single_turn
 
+                greedy_token = await session.argmax()
+                top_scores = await session.top_logprobs(3)
+                assert top_scores
+                assert all(
+                    isinstance(score, pyds4.TokenScore)
+                    for score in top_scores
+                )
+                assert top_scores[0].token_id == greedy_token
+                greedy_logprob = await session.token_logprob(greedy_token)
+                assert isfinite(greedy_logprob)
+                assert abs(greedy_logprob - top_scores[0].logprob) < 1e-5
+
                 greedy = await session.next_token(decode=True)
+                assert greedy.token_id == greedy_token
                 assert greedy.advanced is not greedy.is_eos
                 if greedy.is_eos:
                     assert greedy.token_bytes is None

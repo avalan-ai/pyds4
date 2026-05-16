@@ -69,6 +69,12 @@ class _SessionState:
     ) -> object:
         return object()
 
+    def token_logprob(self, token_id: int) -> object:
+        return "bad"
+
+    def top_logprobs(self, k: int) -> object:
+        return [(True, -0.25)]
+
     def save_snapshot(self) -> object:
         return "not bytes"
 
@@ -152,6 +158,12 @@ class _FailingSessionState:
         min_p: float,
         seed: int | None,
     ) -> int:
+        raise RuntimeError("native detail")
+
+    def token_logprob(self, token_id: int) -> float:
+        raise RuntimeError("native detail")
+
+    def top_logprobs(self, k: int) -> list[tuple[int, float]]:
         raise RuntimeError("native detail")
 
     def rewind(self, pos: int) -> None:
@@ -306,6 +318,8 @@ def test_session_rejects_malformed_native_inspection_values(
         ("argmax", ()),
         ("argmax_excluding", (1,)),
         ("sample", (pyds4.SamplingOptions(),)),
+        ("token_logprob", (1,)),
+        ("top_logprobs", (1,)),
         ("save_snapshot", ()),
         ("save_payload", ()),
     ],
@@ -328,6 +342,8 @@ def test_session_rejects_malformed_native_token_results(
         ("argmax", ()),
         ("argmax_excluding", (1,)),
         ("sample", (pyds4.SamplingOptions(),)),
+        ("token_logprob", (1,)),
+        ("top_logprobs", (1,)),
         ("rewind", (0,)),
         ("save_snapshot", ()),
         ("load_snapshot", (b"snapshot",)),

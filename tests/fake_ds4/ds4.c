@@ -623,6 +623,67 @@ int ds4_session_sample(ds4_session* s, float temperature, int top_k,
     return FAKE_TOKEN_BYTE_BASE + (int)('a' + (value % 26u));
 }
 
+static float fake_logprob_for_token(int token) {
+    const int first = FAKE_TOKEN_BYTE_BASE + 'A';
+    if (token == first)
+        return -0.25f;
+    if (token == first + 1)
+        return -1.25f;
+    if (token == first + 2)
+        return -2.25f;
+    if (token >= FAKE_TOKEN_BYTE_BASE)
+        return -10.0f - (float)(token - FAKE_TOKEN_BYTE_BASE) / 100.0f;
+    return -20.0f;
+}
+
+int ds4_session_top_logprobs(ds4_session* s, ds4_token_score* out, int k) {
+    counters.last_top_logprobs_sequence = next_call();
+    counters.top_logprobs_calls++;
+    fake_delay_if_requested("top_logprobs");
+    if (env_should_fail("top_logprobs"))
+        return 0;
+    if (!s || !s->valid || !out || k <= 0)
+        return 0;
+    if (env_value_is_enabled(getenv("PYDS4_FAKE_MALFORMED_TOP_LOGPROBS"))) {
+        out[0].id = -1;
+        out[0].logit = 1.0f;
+        out[0].logprob = -0.25f;
+        return 1;
+    }
+
+    for (int i = 0; i < k; i++) {
+        const int token = FAKE_TOKEN_BYTE_BASE + 'A' + i;
+        out[i].id = token;
+        out[i].logit = 10.0f - (float)i;
+        out[i].logprob = fake_logprob_for_token(token);
+    }
+    return k;
+}
+
+int ds4_session_token_logprob(ds4_session* s, int token,
+                              ds4_token_score* out) {
+    counters.last_token_logprob_sequence = next_call();
+    counters.token_logprob_calls++;
+    fake_delay_if_requested("token_logprob");
+    if (env_should_fail("token_logprob"))
+        return 0;
+    if (!s || !s->valid || !out || token < 0 || token == 13)
+        return 0;
+    if (env_value_is_enabled(getenv("PYDS4_FAKE_MALFORMED_TOKEN_LOGPROB"))) {
+        out->id = -1;
+        out->logit = 1.0f;
+        out->logprob = -0.25f;
+        return 1;
+    }
+
+    out->id = token;
+    out->logit = token >= FAKE_TOKEN_BYTE_BASE
+                     ? 10.0f - (float)(token - FAKE_TOKEN_BYTE_BASE)
+                     : -10.0f;
+    out->logprob = fake_logprob_for_token(token);
+    return 1;
+}
+
 int ds4_session_eval(ds4_session* s, int token, char* err, size_t errlen) {
     counters.last_eval_sequence = next_call();
     counters.eval_calls++;

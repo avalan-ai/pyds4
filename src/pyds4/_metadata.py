@@ -37,6 +37,8 @@ REQUIRED_C_SYMBOLS = (
     "ds4_session_argmax",
     "ds4_session_argmax_excluding",
     "ds4_session_sample",
+    "ds4_session_top_logprobs",
+    "ds4_session_token_logprob",
     "ds4_session_eval",
     "ds4_session_invalidate",
     "ds4_session_rewind",

@@ -204,6 +204,23 @@ class Ds4Capabilities:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenScore:
+    """Describe one token's native DS4 next-token log probability."""
+
+    token_id: int
+    logprob: float
+
+    def __post_init__(self) -> None:
+        _validate_int(
+            "token_id",
+            self.token_id,
+            minimum=0,
+            maximum=C_INT_MAX,
+        )
+        _validate_real("logprob", self.logprob)
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationStep:
     """Describe one candidate token selected by an async generation helper."""
 

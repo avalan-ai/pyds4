@@ -73,6 +73,17 @@ class RecordingSession:
         self._record(f"session.sample:{options.seed}")
         return 103
 
+    def token_logprob(self, token_id: int) -> float:
+        self._record(f"session.token_logprob:{token_id}")
+        return -0.25
+
+    def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
+        self._record(f"session.top_logprobs:{k}")
+        return [
+            pyds4.TokenScore(token_id=101, logprob=-0.25),
+            pyds4.TokenScore(token_id=102, logprob=-1.25),
+        ][:k]
+
     def rewind(self, pos: int) -> None:
         self._record(f"session.rewind:{pos}")
         del self._tokens[pos:]
@@ -287,6 +298,20 @@ class _ValidatingSessionState:
     ) -> int:
         return 103
 
+    def token_logprob(self, token_id: int) -> float:
+        if isinstance(token_id, bool) or not isinstance(token_id, int):
+            raise TypeError("token_id must be an integer token id.")
+        if token_id < 0:
+            raise ValueError("token_id must be non-negative.")
+        return -0.25
+
+    def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
+        if isinstance(k, bool) or not isinstance(k, int):
+            raise TypeError("k must be a non-negative integer.")
+        if k < 0:
+            raise ValueError("k must be non-negative.")
+        return [pyds4.TokenScore(token_id=101, logprob=-0.25)][:k]
+
     def rewind(self, pos: int) -> None:
         del self.tokens[pos:]
         self.pos = len(self.tokens)
@@ -429,6 +454,12 @@ class _FailingSessionState(_ValidatingSessionState):
         min_p: float,
         seed: int | None,
     ) -> int:
+        raise RuntimeError("native detail")
+
+    def token_logprob(self, token_id: int) -> float:
+        raise RuntimeError("native detail")
+
+    def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
         raise RuntimeError("native detail")
 
     def rewind(self, pos: int) -> None:
@@ -673,6 +704,11 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
                 assert (
                     await session.sample(pyds4.SamplingOptions(seed=7)) == 103
                 )
+                assert await session.token_logprob(101) == -0.25
+                assert await session.top_logprobs(2) == [
+                    pyds4.TokenScore(token_id=101, logprob=-0.25),
+                    pyds4.TokenScore(token_id=102, logprob=-1.25),
+                ]
                 await session.eval(104)
                 assert await session.tokens == [1, 2, 104]
                 assert await session.save_snapshot() == b"snapshot"
@@ -704,6 +740,8 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
         "session.argmax",
         "session.argmax_excluding:101",
         "session.sample:7",
+        "session.token_logprob:101",
+        "session.top_logprobs:2",
         "session.eval",
         "session.tokens",
         "session.save_snapshot",
@@ -761,6 +799,12 @@ def test_async_session_methods_mirror_sync_validation_errors(
 
                 with pytest.raises(TypeError, match="SamplingOptions"):
                     await session.sample(object())  # type: ignore[arg-type]
+
+                with pytest.raises(TypeError, match="token_id"):
+                    await session.token_logprob(True)  # type: ignore[arg-type]
+
+                with pytest.raises(ValueError, match="k"):
+                    await session.top_logprobs(-1)
 
                 with pytest.raises(TypeError, match="pos"):
                     await session.rewind(False)  # type: ignore[arg-type]
@@ -840,6 +884,8 @@ def test_async_session_properties_mirror_sync_validation_errors(
         ("argmax", lambda session: session.argmax()),
         ("argmax_excluding", lambda session: session.argmax_excluding(1)),
         ("sample", lambda session: session.sample(pyds4.SamplingOptions())),
+        ("token_logprob", lambda session: session.token_logprob(1)),
+        ("top_logprobs", lambda session: session.top_logprobs(1)),
         ("rewind", lambda session: session.rewind(0)),
         ("save_snapshot", lambda session: session.save_snapshot()),
         ("load_snapshot", lambda session: session.load_snapshot(b"snapshot")),

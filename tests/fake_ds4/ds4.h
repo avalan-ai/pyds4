@@ -120,6 +120,8 @@ int ds4_session_argmax(ds4_session* s);
 int ds4_session_argmax_excluding(ds4_session* s, int excluded_id);
 int ds4_session_sample(ds4_session* s, float temperature, int top_k,
                        float top_p, float min_p, uint64_t* rng);
+int ds4_session_top_logprobs(ds4_session* s, ds4_token_score* out, int k);
+int ds4_session_token_logprob(ds4_session* s, int token, ds4_token_score* out);
 int ds4_session_eval(ds4_session* s, int token, char* err, size_t errlen);
 void ds4_session_invalidate(ds4_session* s);
 void ds4_session_rewind(ds4_session* s, int pos);
@@ -151,6 +153,8 @@ typedef struct {
     uint64_t argmax_calls;
     uint64_t argmax_excluding_calls;
     uint64_t sample_calls;
+    uint64_t top_logprobs_calls;
+    uint64_t token_logprob_calls;
     uint64_t rewind_calls;
     uint64_t invalidate_calls;
     uint64_t payload_bytes_calls;
@@ -176,6 +180,8 @@ typedef struct {
     uint64_t last_argmax_sequence;
     uint64_t last_argmax_excluding_sequence;
     uint64_t last_sample_sequence;
+    uint64_t last_top_logprobs_sequence;
+    uint64_t last_token_logprob_sequence;
     uint64_t last_rewind_sequence;
     uint64_t last_invalidate_sequence;
     uint64_t last_payload_bytes_sequence;

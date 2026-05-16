@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import isfinite
+
 from _real_ds4_profiles import real_ds4_settings
 
 import pyds4
@@ -49,6 +51,15 @@ def test_real_ds4_generation_smoke() -> None:
 
             greedy = session.argmax()
             assert session.pos == len(single_turn)
+            top_scores = session.top_logprobs(3)
+            assert top_scores
+            assert all(
+                isinstance(score, pyds4.TokenScore) for score in top_scores
+            )
+            assert top_scores[0].token_id == greedy
+            greedy_logprob = session.token_logprob(greedy)
+            assert isfinite(greedy_logprob)
+            assert abs(greedy_logprob - top_scores[0].logprob) < 1e-5
             session.eval(greedy)
             assert session.pos == len(single_turn) + 1
 

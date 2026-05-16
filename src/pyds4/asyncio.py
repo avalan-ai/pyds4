@@ -17,6 +17,7 @@ from .types import (
     ProgressEvent,
     SamplingOptions,
     ThinkMode,
+    TokenScore,
 )
 
 _T = TypeVar("_T")
@@ -462,6 +463,16 @@ class AsyncSession:
         return await self._call_session(
             lambda session: session.sample(options),
             mutating=True,
+        )
+
+    async def token_logprob(self, token_id: int) -> float:
+        return await self._call_session(
+            lambda session: session.token_logprob(token_id)
+        )
+
+    async def top_logprobs(self, k: int) -> list[TokenScore]:
+        return await self._call_session(
+            lambda session: session.top_logprobs(k)
         )
 
     async def next_token(

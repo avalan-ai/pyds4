@@ -36,6 +36,7 @@ _DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES = frozenset(
         "SamplingOptions",
         "Session",
         "ThinkMode",
+        "TokenScore",
         "__ds4_api_version__",
         "__ds4_available_backends__",
         "__ds4_commit__",

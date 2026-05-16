@@ -1,5 +1,6 @@
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -524,6 +525,63 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
                 "sample failed: DS4 returned invalid token id.");
         }
         return token;
+    }
+
+    double token_logprob(py::handle token_id) {
+        const int token = py_token_id(token_id, "token_id");
+
+        ds4_token_score score = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            ensure_logits_ready("token_logprob");
+            result = ds4_session_token_logprob(session, token, &score);
+        }
+        if (result != 1) {
+            throw std::runtime_error(
+                "token_logprob failed: DS4 returned no token score.");
+        }
+        if (score.id != token || !std::isfinite(score.logprob)) {
+            throw std::runtime_error(
+                "token_logprob failed: DS4 returned malformed token score.");
+        }
+        return static_cast<double>(score.logprob);
+    }
+
+    py::list top_logprobs(py::handle k_value) {
+        const int k = py_non_negative_int(k_value, "k");
+        py::list result;
+        if (k == 0) {
+            return result;
+        }
+
+        std::vector<ds4_token_score> scores(static_cast<std::size_t>(k));
+        int count = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            ensure_logits_ready("top_logprobs");
+            count = ds4_session_top_logprobs(session, scores.data(), k);
+        }
+        if (count <= 0 || count > k) {
+            throw std::runtime_error(
+                "top_logprobs failed: DS4 returned invalid score count.");
+        }
+
+        for (int i = 0; i < count; ++i) {
+            const ds4_token_score& score = scores[static_cast<std::size_t>(i)];
+            if (score.id < 0 || !std::isfinite(score.logprob)) {
+                throw std::runtime_error(
+                    "top_logprobs failed: DS4 returned malformed token "
+                    "score.");
+            }
+            result.append(
+                py::make_tuple(score.id, static_cast<double>(score.logprob)));
+        }
+        return result;
     }
 
     void rewind(py::handle pos_value) {
@@ -1094,6 +1152,9 @@ PYBIND11_MODULE(_native, module) {
         .def("sample", &SessionState::sample, py::arg("temperature"),
              py::arg("top_k"), py::arg("top_p"), py::arg("min_p"),
              py::arg("seed") = py::none())
+        .def("token_logprob", &SessionState::token_logprob,
+             py::arg("token_id"))
+        .def("top_logprobs", &SessionState::top_logprobs, py::arg("k"))
         .def("rewind", &SessionState::rewind, py::arg("pos"))
         .def("save_snapshot", &SessionState::save_snapshot)
         .def("load_snapshot", &SessionState::load_snapshot,
@@ -1121,6 +1182,8 @@ PYBIND11_MODULE(_native, module) {
         result["argmax_calls"] = counters.argmax_calls;
         result["argmax_excluding_calls"] = counters.argmax_excluding_calls;
         result["sample_calls"] = counters.sample_calls;
+        result["top_logprobs_calls"] = counters.top_logprobs_calls;
+        result["token_logprob_calls"] = counters.token_logprob_calls;
         result["rewind_calls"] = counters.rewind_calls;
         result["invalidate_calls"] = counters.invalidate_calls;
         result["payload_bytes_calls"] = counters.payload_bytes_calls;
@@ -1156,6 +1219,10 @@ PYBIND11_MODULE(_native, module) {
         result["last_argmax_excluding_sequence"] =
             counters.last_argmax_excluding_sequence;
         result["last_sample_sequence"] = counters.last_sample_sequence;
+        result["last_top_logprobs_sequence"] =
+            counters.last_top_logprobs_sequence;
+        result["last_token_logprob_sequence"] =
+            counters.last_token_logprob_sequence;
         result["last_rewind_sequence"] = counters.last_rewind_sequence;
         result["last_invalidate_sequence"] = counters.last_invalidate_sequence;
         result["last_payload_bytes_sequence"] =

@@ -78,6 +78,10 @@ def test_public_type_defaults_and_enum_coercion() -> None:
     assert progress.current == 1
     assert progress.total == 2
 
+    score = pyds4.TokenScore(token_id=5, logprob=-0.25)
+    assert score.token_id == 5
+    assert score.logprob == -0.25
+
 
 def test_public_types_are_frozen_and_slotted() -> None:
     options = pyds4.EngineOptions(model_path="model.gguf")
@@ -106,6 +110,7 @@ def test_public_types_are_frozen_and_slotted() -> None:
         current=1,
         total=2,
     )
+    score = pyds4.TokenScore(token_id=5, logprob=-0.25)
 
     with pytest.raises(FrozenInstanceError):
         options.model_path = "other.gguf"  # type: ignore[misc]
@@ -130,6 +135,12 @@ def test_public_types_are_frozen_and_slotted() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         progress.extra = True  # type: ignore[attr-defined]
+
+    with pytest.raises(FrozenInstanceError):
+        score.logprob = -1.0  # type: ignore[misc]
+
+    with pytest.raises((AttributeError, TypeError)):
+        score.extra = True  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -157,6 +168,26 @@ def test_sampling_options_reject_invalid_values(
 ) -> None:
     with pytest.raises((TypeError, ValueError), match=error_match):
         pyds4.SamplingOptions(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"token_id": True, "logprob": -0.25}, "token_id"),
+        ({"token_id": -1, "logprob": -0.25}, "token_id"),
+        ({"token_id": 2**31, "logprob": -0.25}, "token_id"),
+        ({"token_id": 1, "logprob": True}, "logprob"),
+        ({"token_id": 1, "logprob": "bad"}, "logprob"),
+        ({"token_id": 1, "logprob": math.inf}, "logprob"),
+        ({"token_id": 1, "logprob": math.nan}, "logprob"),
+    ],
+)
+def test_token_score_rejects_invalid_values(
+    kwargs: dict[str, object],
+    error_match: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=error_match):
+        pyds4.TokenScore(**kwargs)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

@@ -40,6 +40,7 @@ from .types import (
     ProgressEvent,
     SamplingOptions,
     ThinkMode,
+    TokenScore,
 )
 
 _configure_metal_source_paths()
@@ -68,6 +69,7 @@ __all__ = [
     "SamplingOptions",
     "Session",
     "ThinkMode",
+    "TokenScore",
     "__ds4_api_version__",
     "__ds4_available_backends__",
     "__ds4_commit__",

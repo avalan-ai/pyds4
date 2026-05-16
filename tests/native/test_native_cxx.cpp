@@ -161,6 +161,19 @@ void test_fake_engine_session_lifecycle() {
     CHECK(sampled <= 1000 + 'z');
     CHECK(rng != 123);
 
+    ds4_token_score scores[3] = {};
+    CHECK(ds4_session_top_logprobs(session, scores, 3) == 3);
+    CHECK(scores[0].id == first_generated_token);
+    CHECK(scores[0].logprob == -0.25F);
+    CHECK(scores[1].id == second_generated_token);
+    CHECK(scores[1].logprob == -1.25F);
+
+    ds4_token_score sampled_score = {};
+    CHECK(ds4_session_token_logprob(session, first_generated_token,
+                                    &sampled_score) == 1);
+    CHECK(sampled_score.id == first_generated_token);
+    CHECK(sampled_score.logprob == -0.25F);
+
     char error[128] = {};
     CHECK(ds4_session_eval(session, sampled, error, sizeof(error)) == 0);
     CHECK(ds4_session_pos(session) == 3);
@@ -203,6 +216,8 @@ void test_fake_engine_session_lifecycle() {
     CHECK(counters.session_free_calls == 1);
     CHECK(counters.sync_calls == 1);
     CHECK(counters.eval_calls == 2);
+    CHECK(counters.top_logprobs_calls == 1);
+    CHECK(counters.token_logprob_calls == 1);
     CHECK(counters.rewind_calls == 1);
     CHECK(counters.invalidate_calls == 1);
     CHECK(counters.token_live_allocations == 0);
