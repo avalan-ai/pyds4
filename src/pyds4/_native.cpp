@@ -1,7 +1,10 @@
 #include <array>
 #include <climits>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -67,6 +70,86 @@ struct ProgressEvent {
     int current;
     int total;
 };
+
+struct FileCloser {
+    void operator()(std::FILE* file) const {
+        if (file != nullptr) {
+            std::fclose(file);
+        }
+    }
+};
+
+using FilePtr = std::unique_ptr<std::FILE, FileCloser>;
+
+class NativeSnapshot {
+  public:
+    NativeSnapshot() = default;
+    NativeSnapshot(const NativeSnapshot&) = delete;
+    NativeSnapshot& operator=(const NativeSnapshot&) = delete;
+
+    ~NativeSnapshot() {
+        ds4_session_snapshot_free(&snapshot_);
+    }
+
+    ds4_session_snapshot* get() {
+        return &snapshot_;
+    }
+
+    const ds4_session_snapshot* get() const {
+        return &snapshot_;
+    }
+
+  private:
+    ds4_session_snapshot snapshot_ = {};
+};
+
+FilePtr open_temporary_file(const std::string& operation) {
+    std::FILE* file = std::tmpfile();
+    if (file == nullptr) {
+        throw std::runtime_error(operation +
+                                 " failed: could not open a temporary file.");
+    }
+    return FilePtr(file);
+}
+
+void write_all(std::FILE* file, const char* data, std::size_t size,
+               const std::string& operation) {
+    if (size == 0) {
+        return;
+    }
+    if (std::fwrite(data, 1, size, file) != size) {
+        throw std::runtime_error(operation +
+                                 " failed: could not write temporary data.");
+    }
+}
+
+void rewind_after_write(std::FILE* file, const std::string& operation) {
+    if (std::fflush(file) != 0 || std::fseek(file, 0, SEEK_SET) != 0) {
+        throw std::runtime_error(operation +
+                                 " failed: could not rewind temporary data.");
+    }
+}
+
+std::vector<char> read_payload_bytes(std::FILE* file, uint64_t byte_count,
+                                     const std::string& operation) {
+    if (byte_count >
+        static_cast<uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error(operation +
+                                 " failed: payload is too large to copy.");
+    }
+
+    std::vector<char> data(static_cast<std::size_t>(byte_count));
+    if (!data.empty() &&
+        std::fread(data.data(), 1, data.size(), file) != data.size()) {
+        throw std::runtime_error(operation +
+                                 " failed: could not read temporary data.");
+    }
+    return data;
+}
+
+py::bytes bytes_from_vector(const std::vector<char>& data) {
+    return py::bytes(data.empty() ? "" : data.data(), data.size());
+}
 
 ds4_backend to_native_backend(std::string backend) {
     backend = normalized(std::move(backend));
@@ -456,6 +539,134 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
                 logits_ready_ = false;
                 rng_state_.reset();
             }
+        }
+    }
+
+    py::bytes save_snapshot() {
+        std::vector<char> data;
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            NativeSnapshot snapshot;
+            result = ds4_session_save_snapshot(session, snapshot.get(),
+                                               error.data(), error.size());
+            if (result == 0) {
+                const ds4_session_snapshot* raw_snapshot = snapshot.get();
+                if (raw_snapshot->ptr == nullptr || raw_snapshot->len == 0) {
+                    throw std::runtime_error(
+                        "save_snapshot failed: DS4 returned an empty "
+                        "snapshot.");
+                }
+                if (raw_snapshot->len >
+                    static_cast<uint64_t>(
+                        std::numeric_limits<std::size_t>::max())) {
+                    throw std::runtime_error(
+                        "save_snapshot failed: snapshot is too large to "
+                        "copy.");
+                }
+                const auto* begin =
+                    reinterpret_cast<const char*>(raw_snapshot->ptr);
+                data.assign(begin, begin + static_cast<std::size_t>(
+                                               raw_snapshot->len));
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_save_snapshot failed.";
+            throw std::runtime_error("save_snapshot failed: " + message);
+        }
+        return bytes_from_vector(data);
+    }
+
+    void load_snapshot(py::bytes snapshot_bytes) {
+        const std::string data = py::cast<std::string>(snapshot_bytes);
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            ds4_session_snapshot snapshot = {};
+            snapshot.ptr =
+                reinterpret_cast<uint8_t*>(const_cast<char*>(data.data()));
+            snapshot.len = static_cast<uint64_t>(data.size());
+            snapshot.cap = snapshot.len;
+            result = ds4_session_load_snapshot(session, &snapshot,
+                                               error.data(), error.size());
+            if (result != 0) {
+                logits_ready_ = false;
+                rng_state_.reset();
+            } else {
+                logits_ready_ = true;
+                rng_state_.reset();
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_load_snapshot failed.";
+            throw std::runtime_error("load_snapshot failed: " + message);
+        }
+    }
+
+    py::bytes save_payload() {
+        std::vector<char> data;
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            const uint64_t byte_count = ds4_session_payload_bytes(session);
+            FilePtr file = open_temporary_file("save_payload");
+            result = ds4_session_save_payload(session, file.get(),
+                                              error.data(), error.size());
+            if (result == 0) {
+                rewind_after_write(file.get(), "save_payload");
+                data =
+                    read_payload_bytes(file.get(), byte_count, "save_payload");
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_save_payload failed.";
+            throw std::runtime_error("save_payload failed: " + message);
+        }
+        return bytes_from_vector(data);
+    }
+
+    void load_payload(py::bytes payload_bytes) {
+        const std::string data = py::cast<std::string>(payload_bytes);
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            FilePtr file = open_temporary_file("load_payload");
+            write_all(file.get(), data.data(), data.size(), "load_payload");
+            rewind_after_write(file.get(), "load_payload");
+            result = ds4_session_load_payload(
+                session, file.get(), static_cast<uint64_t>(data.size()),
+                error.data(), error.size());
+            if (result != 0) {
+                logits_ready_ = false;
+                rng_state_.reset();
+            } else {
+                logits_ready_ = true;
+                rng_state_.reset();
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_load_payload failed.";
+            throw std::runtime_error("load_payload failed: " + message);
         }
     }
 
@@ -884,6 +1095,11 @@ PYBIND11_MODULE(_native, module) {
              py::arg("top_k"), py::arg("top_p"), py::arg("min_p"),
              py::arg("seed") = py::none())
         .def("rewind", &SessionState::rewind, py::arg("pos"))
+        .def("save_snapshot", &SessionState::save_snapshot)
+        .def("load_snapshot", &SessionState::load_snapshot,
+             py::arg("snapshot"))
+        .def("save_payload", &SessionState::save_payload)
+        .def("load_payload", &SessionState::load_payload, py::arg("payload"))
         .def("invalidate", &SessionState::invalidate)
         .def("set_progress_wakeup_fd", &SessionState::set_progress_wakeup_fd,
              py::arg("fd"))
@@ -907,10 +1123,22 @@ PYBIND11_MODULE(_native, module) {
         result["sample_calls"] = counters.sample_calls;
         result["rewind_calls"] = counters.rewind_calls;
         result["invalidate_calls"] = counters.invalidate_calls;
+        result["payload_bytes_calls"] = counters.payload_bytes_calls;
+        result["save_payload_calls"] = counters.save_payload_calls;
+        result["load_payload_calls"] = counters.load_payload_calls;
+        result["save_snapshot_calls"] = counters.save_snapshot_calls;
+        result["load_snapshot_calls"] = counters.load_snapshot_calls;
+        result["snapshot_free_calls"] = counters.snapshot_free_calls;
         result["token_allocation_calls"] = counters.token_allocation_calls;
         result["token_live_allocations"] = counters.token_live_allocations;
         result["token_peak_live_allocations"] =
             counters.token_peak_live_allocations;
+        result["snapshot_allocation_calls"] =
+            counters.snapshot_allocation_calls;
+        result["snapshot_live_allocations"] =
+            counters.snapshot_live_allocations;
+        result["snapshot_peak_live_allocations"] =
+            counters.snapshot_peak_live_allocations;
         result["call_sequence"] = counters.call_sequence;
         result["last_engine_open_sequence"] =
             counters.last_engine_open_sequence;
@@ -930,6 +1158,18 @@ PYBIND11_MODULE(_native, module) {
         result["last_sample_sequence"] = counters.last_sample_sequence;
         result["last_rewind_sequence"] = counters.last_rewind_sequence;
         result["last_invalidate_sequence"] = counters.last_invalidate_sequence;
+        result["last_payload_bytes_sequence"] =
+            counters.last_payload_bytes_sequence;
+        result["last_save_payload_sequence"] =
+            counters.last_save_payload_sequence;
+        result["last_load_payload_sequence"] =
+            counters.last_load_payload_sequence;
+        result["last_save_snapshot_sequence"] =
+            counters.last_save_snapshot_sequence;
+        result["last_load_snapshot_sequence"] =
+            counters.last_load_snapshot_sequence;
+        result["last_snapshot_free_sequence"] =
+            counters.last_snapshot_free_sequence;
         return result;
     });
 #endif

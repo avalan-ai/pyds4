@@ -46,4 +46,10 @@ REQUIRED_C_SYMBOLS = (
     "ds4_engine_has_mtp",
     "ds4_engine_mtp_draft_tokens",
     "ds4_session_tokens",
+    "ds4_session_payload_bytes",
+    "ds4_session_save_payload",
+    "ds4_session_load_payload",
+    "ds4_session_save_snapshot",
+    "ds4_session_load_snapshot",
+    "ds4_session_snapshot_free",
 )

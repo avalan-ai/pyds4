@@ -26,6 +26,9 @@ enum {
 static const uint32_t FAKE_THINK_MAX_MIN_CONTEXT = 393216u;
 static const char FAKE_THINK_MAX_PREFIX[] =
     "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n";
+static const uint32_t FAKE_PAYLOAD_MAGIC = 0x34445350u; /* PDS4 */
+static const uint32_t FAKE_PAYLOAD_VERSION = 1u;
+static const uint64_t FAKE_PAYLOAD_FIXED_BYTES = 5u * sizeof(uint32_t);
 
 struct ds4_engine {
     ds4_backend backend;
@@ -168,6 +171,59 @@ static void fake_delay_if_requested(const char* operation) {
 static void set_error(char* err, size_t errlen, const char* message) {
     if (err && errlen != 0)
         snprintf(err, errlen, "%s", message);
+}
+
+static void write_le32(uint8_t* out, uint32_t value) {
+    out[0] = (uint8_t)value;
+    out[1] = (uint8_t)(value >> 8);
+    out[2] = (uint8_t)(value >> 16);
+    out[3] = (uint8_t)(value >> 24);
+}
+
+static uint32_t read_le32(const uint8_t* in) {
+    return (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16) |
+           ((uint32_t)in[3] << 24);
+}
+
+static int write_u32(FILE* fp, uint32_t value, char* err, size_t errlen) {
+    uint8_t data[4];
+    write_le32(data, value);
+    if (fwrite(data, 1, sizeof(data), fp) != sizeof(data)) {
+        set_error(err, errlen, "failed to write fake session payload");
+        return 1;
+    }
+    return 0;
+}
+
+static int read_exact(FILE* fp, uint8_t* out, uint64_t bytes,
+                      uint64_t* remaining, char* err, size_t errlen) {
+    if (*remaining < bytes || bytes > (uint64_t)SIZE_MAX) {
+        set_error(err, errlen, "truncated fake session payload");
+        return 1;
+    }
+    if (bytes > 0 && fread(out, 1, (size_t)bytes, fp) != (size_t)bytes) {
+        set_error(err, errlen, "failed to read fake session payload");
+        return 1;
+    }
+    *remaining -= bytes;
+    return 0;
+}
+
+static int read_u32(FILE* fp, uint32_t* out, uint64_t* remaining, char* err,
+                    size_t errlen) {
+    uint8_t data[4];
+    if (read_exact(fp, data, sizeof(data), remaining, err, errlen) != 0)
+        return 1;
+    *out = read_le32(data);
+    return 0;
+}
+
+static uint64_t fake_payload_bytes(ds4_session* s) {
+    if (!s || !s->valid || !s->engine || !s->engine->model_path)
+        return 0;
+    const uint64_t model_len = (uint64_t)strlen(s->engine->model_path);
+    return FAKE_PAYLOAD_FIXED_BYTES + model_len +
+           (uint64_t)s->checkpoint.len * sizeof(uint32_t);
 }
 
 static void ensure_token_capacity(ds4_tokens* tv, int needed) {
@@ -630,4 +686,247 @@ int ds4_engine_mtp_draft_tokens(ds4_engine* e) {
 
 const ds4_tokens* ds4_session_tokens(ds4_session* s) {
     return s ? &s->checkpoint : NULL;
+}
+
+uint64_t ds4_session_payload_bytes(ds4_session* s) {
+    counters.last_payload_bytes_sequence = next_call();
+    counters.payload_bytes_calls++;
+    return fake_payload_bytes(s);
+}
+
+int ds4_session_save_payload(ds4_session* s, FILE* fp, char* err,
+                             size_t errlen) {
+    counters.last_save_payload_sequence = next_call();
+    counters.save_payload_calls++;
+    fake_delay_if_requested("save_payload");
+    if (!s || !fp || !s->valid || !s->engine || !s->engine->model_path) {
+        set_error(err, errlen, "session has no valid checkpoint to save");
+        return 1;
+    }
+    if (env_should_fail("save_payload")) {
+        set_error(err, errlen, "fake env save payload failure");
+        return 1;
+    }
+
+    const uint32_t model_len = (uint32_t)strlen(s->engine->model_path);
+    if (write_u32(fp, FAKE_PAYLOAD_MAGIC, err, errlen) != 0 ||
+        write_u32(fp, FAKE_PAYLOAD_VERSION, err, errlen) != 0 ||
+        write_u32(fp, (uint32_t)s->ctx_size, err, errlen) != 0 ||
+        write_u32(fp, (uint32_t)s->checkpoint.len, err, errlen) != 0 ||
+        write_u32(fp, model_len, err, errlen) != 0) {
+        return 1;
+    }
+    if (model_len > 0 &&
+        fwrite(s->engine->model_path, 1, model_len, fp) != model_len) {
+        set_error(err, errlen, "failed to write fake session payload");
+        return 1;
+    }
+    for (int i = 0; i < s->checkpoint.len; i++) {
+        if (write_u32(fp, (uint32_t)s->checkpoint.v[i], err, errlen) != 0)
+            return 1;
+    }
+    return 0;
+}
+
+int ds4_session_load_payload(ds4_session* s, FILE* fp, uint64_t payload_bytes,
+                             char* err, size_t errlen) {
+    counters.last_load_payload_sequence = next_call();
+    counters.load_payload_calls++;
+    fake_delay_if_requested("load_payload");
+    if (!s || !fp || !s->engine || !s->engine->model_path) {
+        set_error(err, errlen, "invalid session payload load");
+        return 1;
+    }
+    if (env_should_fail("load_payload")) {
+        set_error(err, errlen, "fake env load payload failure");
+        return 1;
+    }
+
+    uint64_t remaining = payload_bytes;
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint32_t ctx_size = 0;
+    uint32_t token_count = 0;
+    uint32_t model_len = 0;
+    if (read_u32(fp, &magic, &remaining, err, errlen) != 0 ||
+        read_u32(fp, &version, &remaining, err, errlen) != 0 ||
+        read_u32(fp, &ctx_size, &remaining, err, errlen) != 0 ||
+        read_u32(fp, &token_count, &remaining, err, errlen) != 0 ||
+        read_u32(fp, &model_len, &remaining, err, errlen) != 0) {
+        return 1;
+    }
+    if (magic != FAKE_PAYLOAD_MAGIC || version != FAKE_PAYLOAD_VERSION) {
+        set_error(err, errlen, "unsupported fake session payload version");
+        return 1;
+    }
+    if (ctx_size != (uint32_t)s->ctx_size || token_count >= ctx_size) {
+        set_error(
+            err, errlen,
+            "fake session payload context does not match current session");
+        return 1;
+    }
+    const size_t current_model_len = strlen(s->engine->model_path);
+    if ((uint64_t)model_len > remaining ||
+        model_len != (uint32_t)current_model_len) {
+        set_error(err, errlen,
+                  "fake session payload model does not match current engine");
+        return 1;
+    }
+
+    char* model = malloc((size_t)model_len + 1);
+    if (!model)
+        abort();
+    if (read_exact(fp, (uint8_t*)model, model_len, &remaining, err, errlen) !=
+        0) {
+        free(model);
+        return 1;
+    }
+    model[model_len] = '\0';
+    if (strcmp(model, s->engine->model_path) != 0) {
+        free(model);
+        set_error(err, errlen,
+                  "fake session payload model does not match current engine");
+        return 1;
+    }
+    free(model);
+
+    ds4_tokens next = {0};
+    for (uint32_t i = 0; i < token_count; i++) {
+        uint32_t token = 0;
+        if (read_u32(fp, &token, &remaining, err, errlen) != 0) {
+            ds4_tokens_free(&next);
+            return 1;
+        }
+        if (token > (uint32_t)INT_MAX) {
+            ds4_tokens_free(&next);
+            set_error(err, errlen,
+                      "fake session payload contains invalid token id");
+            return 1;
+        }
+        ds4_tokens_push(&next, (int)token);
+    }
+    if (remaining != 0) {
+        ds4_tokens_free(&next);
+        set_error(err, errlen, "fake session payload has trailing bytes");
+        return 1;
+    }
+
+    ds4_tokens_free(&s->checkpoint);
+    s->checkpoint = next;
+    s->valid = true;
+    return 0;
+}
+
+int ds4_session_save_snapshot(ds4_session* s, ds4_session_snapshot* snap,
+                              char* err, size_t errlen) {
+    counters.last_save_snapshot_sequence = next_call();
+    counters.save_snapshot_calls++;
+    fake_delay_if_requested("save_snapshot");
+    if (!s || !snap) {
+        set_error(err, errlen, "invalid session snapshot save");
+        return 1;
+    }
+    if (env_should_fail("save_snapshot")) {
+        set_error(err, errlen, "fake env save snapshot failure");
+        return 1;
+    }
+    const uint64_t bytes = fake_payload_bytes(s);
+    if (bytes == 0 || bytes > (uint64_t)SIZE_MAX) {
+        set_error(err, errlen, "session has no valid checkpoint to snapshot");
+        return 1;
+    }
+    if (snap->cap < bytes) {
+        uint8_t* next = realloc(snap->ptr, (size_t)bytes);
+        if (!next) {
+            set_error(err, errlen,
+                      "out of memory while allocating fake session snapshot");
+            return 1;
+        }
+        if (!snap->ptr) {
+            counters.snapshot_allocation_calls++;
+            counters.snapshot_live_allocations++;
+            if (counters.snapshot_live_allocations >
+                counters.snapshot_peak_live_allocations) {
+                counters.snapshot_peak_live_allocations =
+                    counters.snapshot_live_allocations;
+            }
+        }
+        snap->ptr = next;
+        snap->cap = bytes;
+    }
+
+    FILE* fp = tmpfile();
+    if (!fp) {
+        set_error(err, errlen, "failed to open fake snapshot memory file");
+        return 1;
+    }
+    const int rc = ds4_session_save_payload(s, fp, err, errlen);
+    if (rc == 0 && fflush(fp) != 0) {
+        set_error(err, errlen, "failed to flush fake session snapshot");
+        fclose(fp);
+        return 1;
+    }
+    if (rc == 0 && fseek(fp, 0, SEEK_SET) != 0) {
+        set_error(err, errlen, "failed to rewind fake session snapshot");
+        fclose(fp);
+        return 1;
+    }
+    if (rc == 0 && fread(snap->ptr, 1, (size_t)bytes, fp) != (size_t)bytes) {
+        set_error(err, errlen, "failed to read fake session snapshot");
+        fclose(fp);
+        return 1;
+    }
+    fclose(fp);
+    if (rc != 0)
+        return 1;
+    snap->len = bytes;
+    return 0;
+}
+
+int ds4_session_load_snapshot(ds4_session* s, const ds4_session_snapshot* snap,
+                              char* err, size_t errlen) {
+    counters.last_load_snapshot_sequence = next_call();
+    counters.load_snapshot_calls++;
+    fake_delay_if_requested("load_snapshot");
+    if (!s || !snap || !snap->ptr || snap->len == 0) {
+        set_error(err, errlen, "invalid session snapshot load");
+        return 1;
+    }
+    if (snap->len > (uint64_t)SIZE_MAX) {
+        set_error(err, errlen,
+                  "fake session snapshot is too large for this platform");
+        return 1;
+    }
+    if (env_should_fail("load_snapshot")) {
+        set_error(err, errlen, "fake env load snapshot failure");
+        return 1;
+    }
+
+    FILE* fp = tmpfile();
+    if (!fp) {
+        set_error(err, errlen, "failed to open fake snapshot memory file");
+        return 1;
+    }
+    if (fwrite(snap->ptr, 1, (size_t)snap->len, fp) != (size_t)snap->len ||
+        fflush(fp) != 0 || fseek(fp, 0, SEEK_SET) != 0) {
+        set_error(err, errlen, "failed to prepare fake session snapshot");
+        fclose(fp);
+        return 1;
+    }
+    const int rc = ds4_session_load_payload(s, fp, snap->len, err, errlen);
+    fclose(fp);
+    return rc;
+}
+
+void ds4_session_snapshot_free(ds4_session_snapshot* snap) {
+    if (!snap)
+        return;
+    counters.last_snapshot_free_sequence = next_call();
+    counters.snapshot_free_calls++;
+    if (snap->ptr && counters.snapshot_live_allocations > 0)
+        counters.snapshot_live_allocations--;
+    free(snap->ptr);
+    snap->ptr = NULL;
+    snap->len = 0;
+    snap->cap = 0;
 }

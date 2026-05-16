@@ -69,6 +69,12 @@ class _SessionState:
     ) -> object:
         return object()
 
+    def save_snapshot(self) -> object:
+        return "not bytes"
+
+    def save_payload(self) -> object:
+        return "not bytes"
+
 
 class _FailingEngineState:
     closed = False
@@ -149,6 +155,18 @@ class _FailingSessionState:
         raise RuntimeError("native detail")
 
     def rewind(self, pos: int) -> None:
+        raise RuntimeError("native detail")
+
+    def save_snapshot(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        raise RuntimeError("native detail")
+
+    def save_payload(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_payload(self, payload: bytes) -> None:
         raise RuntimeError("native detail")
 
     def invalidate(self) -> None:
@@ -288,6 +306,8 @@ def test_session_rejects_malformed_native_inspection_values(
         ("argmax", ()),
         ("argmax_excluding", (1,)),
         ("sample", (pyds4.SamplingOptions(),)),
+        ("save_snapshot", ()),
+        ("save_payload", ()),
     ],
 )
 def test_session_rejects_malformed_native_token_results(
@@ -309,6 +329,10 @@ def test_session_rejects_malformed_native_token_results(
         ("argmax_excluding", (1,)),
         ("sample", (pyds4.SamplingOptions(),)),
         ("rewind", (0,)),
+        ("save_snapshot", ()),
+        ("load_snapshot", (b"snapshot",)),
+        ("save_payload", ()),
+        ("load_payload", (b"payload",)),
         ("invalidate", ()),
     ],
 )

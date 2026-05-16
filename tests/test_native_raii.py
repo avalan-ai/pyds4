@@ -20,6 +20,7 @@ def reset_fake_counters() -> Iterator[None]:
     yield
     gc.collect()
     assert counters()["token_live_allocations"] == 0
+    assert counters()["snapshot_live_allocations"] == 0
 
 
 def counters() -> dict[str, int]:
@@ -48,8 +49,8 @@ def test_fake_native_capabilities_match_bound_runtime_surface() -> None:
     assert caps.required_symbols == tuple(pyds4.REQUIRED_C_SYMBOLS)
     assert caps.progress is True
     assert caps.mtp is True
-    assert caps.snapshots is False
-    assert caps.payloads is False
+    assert caps.snapshots is True
+    assert caps.payloads is True
     assert caps.logprobs is False
     assert caps.top_logprobs is False
     assert caps.speculative_eval is False
@@ -484,6 +485,178 @@ def test_rewind_and_invalidate_update_native_session_state() -> None:
         session.argmax()
 
     session.close()
+    engine.close()
+
+
+def test_snapshot_save_load_restores_position_and_tokens() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1, 2])
+    session.eval(1000 + ord("A"))
+
+    snapshot = session.save_snapshot()
+    assert isinstance(snapshot, bytes)
+    assert snapshot
+
+    session.eval(1000 + ord("B"))
+    assert session.tokens == [1, 2, 1000 + ord("A"), 1000 + ord("B")]
+
+    session.load_snapshot(snapshot)
+
+    assert session.pos == 3
+    assert session.tokens == [1, 2, 1000 + ord("A")]
+    assert session.argmax() == 1000 + ord("A")
+
+    counts = counters()
+    assert counts["save_snapshot_calls"] == 1
+    assert counts["load_snapshot_calls"] == 1
+    assert counts["snapshot_allocation_calls"] == 1
+    assert counts["snapshot_free_calls"] == 1
+    assert counts["snapshot_live_allocations"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_payload_save_load_restores_prompt_synchronized_session() -> None:
+    engine = make_engine()
+    source = engine.create_session(64)
+    target = engine.create_session(64)
+    source.sync([1, 2, 3])
+
+    payload = source.save_payload()
+    assert isinstance(payload, bytes)
+    assert payload
+
+    target.sync([9])
+    target.load_payload(payload)
+
+    assert target.pos == 3
+    assert target.tokens == [1, 2, 3]
+    assert target.argmax() == 1000 + ord("A")
+
+    counts = counters()
+    assert counts["payload_bytes_calls"] == 1
+    assert counts["save_payload_calls"] == 1
+    assert counts["load_payload_calls"] == 1
+
+    source.close()
+    target.close()
+    engine.close()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "bad_value", "error_match"),
+    [
+        ("load_snapshot", bytearray(b"snapshot"), "snapshot must be bytes"),
+        ("load_payload", "payload", "payload must be bytes"),
+    ],
+)
+def test_snapshot_and_payload_load_reject_non_bytes_before_native_call(
+    method_name: str,
+    bad_value: object,
+    error_match: str,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+
+    with pytest.raises(TypeError, match=error_match):
+        getattr(session, method_name)(bad_value)
+
+    counts = counters()
+    assert counts["load_snapshot_calls"] == 0
+    assert counts["load_payload_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "bad_value", "error_match"),
+    [
+        ("load_snapshot", b"not a snapshot", "load_snapshot failed"),
+        ("load_payload", b"not a payload", "load_payload failed"),
+    ],
+)
+def test_corrupt_snapshot_and_payload_raise_generation_errors(
+    method_name: str,
+    bad_value: bytes,
+    error_match: str,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+
+    with pytest.raises(pyds4.Ds4GenerationError, match=error_match):
+        getattr(session, method_name)(bad_value)
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("method_name", ["load_snapshot", "load_payload"])
+def test_snapshot_and_payload_from_wrong_context_are_rejected(
+    method_name: str,
+) -> None:
+    engine = make_engine()
+    source = engine.create_session(64)
+    target = engine.create_session(32)
+    source.sync([1, 2])
+    data = (
+        source.save_snapshot()
+        if method_name == "load_snapshot"
+        else source.save_payload()
+    )
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="context"):
+        getattr(target, method_name)(data)
+
+    source.close()
+    target.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("method_name", ["load_snapshot", "load_payload"])
+def test_snapshot_and_payload_from_wrong_model_are_rejected(
+    method_name: str,
+) -> None:
+    source_engine = make_engine(model_path="source.gguf")
+    target_engine = make_engine(model_path="target.gguf")
+    source = source_engine.create_session(64)
+    target = target_engine.create_session(64)
+    source.sync([1, 2])
+    data = (
+        source.save_snapshot()
+        if method_name == "load_snapshot"
+        else source.save_payload()
+    )
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="model"):
+        getattr(target, method_name)(data)
+
+    source.close()
+    target.close()
+    source_engine.close()
+    target_engine.close()
+
+
+def test_snapshot_and_payload_calls_after_close_raise_context_error() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+    snapshot = session.save_snapshot()
+    payload = session.save_payload()
+
+    session.close()
+
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.save_snapshot()
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.load_snapshot(snapshot)
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.save_payload()
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.load_payload(payload)
+
     engine.close()
 
 

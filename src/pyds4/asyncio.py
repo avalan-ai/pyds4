@@ -526,6 +526,26 @@ class AsyncSession:
             mutating=True,
         )
 
+    async def save_snapshot(self) -> bytes:
+        return await self._call_session(
+            lambda session: session.save_snapshot()
+        )
+
+    async def load_snapshot(self, snapshot: bytes) -> None:
+        await self._call_session(
+            lambda session: session.load_snapshot(snapshot),
+            mutating=True,
+        )
+
+    async def save_payload(self) -> bytes:
+        return await self._call_session(lambda session: session.save_payload())
+
+    async def load_payload(self, payload: bytes) -> None:
+        await self._call_session(
+            lambda session: session.load_payload(payload),
+            mutating=True,
+        )
+
     async def invalidate(self) -> None:
         await self._call_session(
             lambda session: session.invalidate(),

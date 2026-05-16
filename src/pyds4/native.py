@@ -225,8 +225,14 @@ def _validate_bytes_result(operation: str, value: object) -> bytes:
     if isinstance(value, bytes):
         return value
     raise Ds4GenerationError(
-        f"{operation} failed: DS4 returned non-bytes token text."
+        f"{operation} failed: DS4 returned non-bytes result."
     )
+
+
+def _validate_bytes_input(name: str, value: object) -> bytes:
+    if not isinstance(value, bytes):
+        raise TypeError(f"{name} must be bytes.")
+    return value
 
 
 def _generation_exception(
@@ -840,6 +846,50 @@ class Session:
             raise
         except RuntimeError as error:
             raise _generation_exception("rewind", error) from error
+
+    def save_snapshot(self) -> bytes:
+        try:
+            return _validate_bytes_result(
+                "save_snapshot",
+                self._require_state().save_snapshot(),
+            )
+        except Ds4Error:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("save_snapshot", error) from error
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        snapshot = _validate_bytes_input("snapshot", snapshot)
+        try:
+            self._require_state().load_snapshot(snapshot)
+        except Ds4Error:
+            raise
+        except TypeError:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("load_snapshot", error) from error
+
+    def save_payload(self) -> bytes:
+        try:
+            return _validate_bytes_result(
+                "save_payload",
+                self._require_state().save_payload(),
+            )
+        except Ds4Error:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("save_payload", error) from error
+
+    def load_payload(self, payload: bytes) -> None:
+        payload = _validate_bytes_input("payload", payload)
+        try:
+            self._require_state().load_payload(payload)
+        except Ds4Error:
+            raise
+        except TypeError:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("load_payload", error) from error
 
     def invalidate(self) -> None:
         try:

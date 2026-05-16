@@ -77,6 +77,22 @@ class RecordingSession:
         self._record(f"session.rewind:{pos}")
         del self._tokens[pos:]
 
+    def save_snapshot(self) -> bytes:
+        self._record("session.save_snapshot")
+        return b"snapshot"
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        self._record(f"session.load_snapshot:{snapshot!r}")
+        self._tokens = [7]
+
+    def save_payload(self) -> bytes:
+        self._record("session.save_payload")
+        return b"payload"
+
+    def load_payload(self, payload: bytes) -> None:
+        self._record(f"session.load_payload:{payload!r}")
+        self._tokens = [8]
+
     def invalidate(self) -> None:
         self._record("session.invalidate")
         self._tokens.clear()
@@ -275,6 +291,24 @@ class _ValidatingSessionState:
         del self.tokens[pos:]
         self.pos = len(self.tokens)
 
+    def save_snapshot(self) -> bytes:
+        return bytes(self.tokens)
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        if not isinstance(snapshot, bytes):
+            raise TypeError("snapshot must be bytes.")
+        self.tokens = list(snapshot)
+        self.pos = len(self.tokens)
+
+    def save_payload(self) -> bytes:
+        return bytes(self.tokens)
+
+    def load_payload(self, payload: bytes) -> None:
+        if not isinstance(payload, bytes):
+            raise TypeError("payload must be bytes.")
+        self.tokens = list(payload)
+        self.pos = len(self.tokens)
+
     def invalidate(self) -> None:
         self.tokens.clear()
         self.pos = 0
@@ -398,6 +432,18 @@ class _FailingSessionState(_ValidatingSessionState):
         raise RuntimeError("native detail")
 
     def rewind(self, pos: int) -> None:
+        raise RuntimeError("native detail")
+
+    def save_snapshot(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        raise RuntimeError("native detail")
+
+    def save_payload(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_payload(self, payload: bytes) -> None:
         raise RuntimeError("native detail")
 
     def invalidate(self) -> None:
@@ -629,6 +675,12 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
                 )
                 await session.eval(104)
                 assert await session.tokens == [1, 2, 104]
+                assert await session.save_snapshot() == b"snapshot"
+                await session.load_snapshot(b"snapshot")
+                assert await session.tokens == [7]
+                assert await session.save_payload() == b"payload"
+                await session.load_payload(b"payload")
+                assert await session.tokens == [8]
 
         assert engine.closed is True
         assert len(set(recording_engine.thread_ids)) == 1
@@ -653,6 +705,12 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
         "session.argmax_excluding:101",
         "session.sample:7",
         "session.eval",
+        "session.tokens",
+        "session.save_snapshot",
+        "session.load_snapshot:b'snapshot'",
+        "session.tokens",
+        "session.save_payload",
+        "session.load_payload:b'payload'",
         "session.tokens",
         "session.close",
         "engine.close",
@@ -706,6 +764,12 @@ def test_async_session_methods_mirror_sync_validation_errors(
 
                 with pytest.raises(TypeError, match="pos"):
                     await session.rewind(False)  # type: ignore[arg-type]
+
+                with pytest.raises(TypeError, match="snapshot"):
+                    await session.load_snapshot("bad")  # type: ignore[arg-type]
+
+                with pytest.raises(TypeError, match="payload"):
+                    await session.load_payload(bytearray(b"bad"))  # type: ignore[arg-type]
 
                 with pytest.raises(TypeError, match="advance"):
                     await session.next_token(advance=1)  # type: ignore[arg-type]
@@ -777,6 +841,10 @@ def test_async_session_properties_mirror_sync_validation_errors(
         ("argmax_excluding", lambda session: session.argmax_excluding(1)),
         ("sample", lambda session: session.sample(pyds4.SamplingOptions())),
         ("rewind", lambda session: session.rewind(0)),
+        ("save_snapshot", lambda session: session.save_snapshot()),
+        ("load_snapshot", lambda session: session.load_snapshot(b"snapshot")),
+        ("save_payload", lambda session: session.save_payload()),
+        ("load_payload", lambda session: session.load_payload(b"payload")),
         ("invalidate", lambda session: session.invalidate()),
         ("argmax", lambda session: session.next_token()),
     ],
@@ -1226,6 +1294,47 @@ def test_async_fake_native_progress_notifications_are_queued() -> None:
                     current=4,
                     total=4,
                 )
+
+    asyncio.run(scenario())
+
+
+def test_async_fake_native_snapshot_and_payload_round_trip() -> None:
+    native = pytest.importorskip("pyds4._native")
+    if not getattr(native, "__ds4_fake_native__", False):
+        pytest.skip("requires a PYDS4_USE_FAKE_DS4 build")
+
+    async def scenario() -> None:
+        native.fake_reset_counters()
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                await session.eval(1000 + ord("A"))
+                snapshot = await session.save_snapshot()
+                payload = await session.save_payload()
+
+                await session.eval(1000 + ord("B"))
+                assert await session.tokens == [
+                    1,
+                    2,
+                    1000 + ord("A"),
+                    1000 + ord("B"),
+                ]
+
+                await session.load_snapshot(snapshot)
+                assert await session.tokens == [1, 2, 1000 + ord("A")]
+
+                await session.invalidate()
+                await session.load_payload(payload)
+                assert await session.tokens == [1, 2, 1000 + ord("A")]
+
+        counts = dict(native.fake_counters())
+        assert counts["save_snapshot_calls"] == 1
+        assert counts["load_snapshot_calls"] == 1
+        assert counts["save_payload_calls"] >= 2
+        assert counts["load_payload_calls"] >= 2
+        assert counts["snapshot_live_allocations"] == 0
 
     asyncio.run(scenario())
 

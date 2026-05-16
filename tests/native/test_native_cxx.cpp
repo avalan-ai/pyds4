@@ -170,6 +170,25 @@ void test_fake_engine_session_lifecycle() {
     CHECK(token_values(ds4_session_tokens(session)) ==
           std::vector<int>({1, 2}));
 
+    const uint64_t payload_bytes = ds4_session_payload_bytes(session);
+    CHECK(payload_bytes > 0);
+
+    ds4_session_snapshot snapshot = {};
+    CHECK(ds4_session_save_snapshot(session, &snapshot, error,
+                                    sizeof(error)) == 0);
+    CHECK(snapshot.ptr != nullptr);
+    CHECK(snapshot.len == payload_bytes);
+
+    CHECK(ds4_session_eval(session, first_generated_token, error,
+                           sizeof(error)) == 0);
+    CHECK(ds4_session_pos(session) == 3);
+    CHECK(ds4_session_load_snapshot(session, &snapshot, error,
+                                    sizeof(error)) == 0);
+    CHECK(ds4_session_pos(session) == 2);
+    CHECK(token_values(ds4_session_tokens(session)) ==
+          std::vector<int>({1, 2}));
+    ds4_session_snapshot_free(&snapshot);
+
     ds4_session_invalidate(session);
     CHECK(ds4_session_pos(session) == 0);
     CHECK(ds4_session_argmax(session) == -1);
@@ -183,10 +202,11 @@ void test_fake_engine_session_lifecycle() {
     CHECK(counters.session_create_calls == 1);
     CHECK(counters.session_free_calls == 1);
     CHECK(counters.sync_calls == 1);
-    CHECK(counters.eval_calls == 1);
+    CHECK(counters.eval_calls == 2);
     CHECK(counters.rewind_calls == 1);
     CHECK(counters.invalidate_calls == 1);
     CHECK(counters.token_live_allocations == 0);
+    CHECK(counters.snapshot_live_allocations == 0);
 }
 
 void test_fake_tokenization_and_chat_helpers() {
