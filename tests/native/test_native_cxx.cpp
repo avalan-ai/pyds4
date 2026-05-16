@@ -183,6 +183,21 @@ void test_fake_engine_session_lifecycle() {
     CHECK(token_values(ds4_session_tokens(session)) ==
           std::vector<int>({1, 2}));
 
+    int accepted[4] = {};
+    CHECK(ds4_session_eval_speculative_argmax(
+              session, first_generated_token, 3, ds4_token_eos(engine),
+              accepted, 4, error, sizeof(error)) == 3);
+    CHECK(std::vector<int>(accepted, accepted + 3) ==
+          std::vector<int>(
+              {first_generated_token, second_generated_token, 1000 + 'C'}));
+    CHECK(ds4_session_pos(session) == 5);
+    CHECK(token_values(ds4_session_tokens(session)) ==
+          std::vector<int>({1, 2, first_generated_token,
+                            second_generated_token, 1000 + 'C'}));
+
+    ds4_session_rewind(session, 2);
+    CHECK(ds4_session_pos(session) == 2);
+
     const uint64_t payload_bytes = ds4_session_payload_bytes(session);
     CHECK(payload_bytes > 0);
 
@@ -218,7 +233,8 @@ void test_fake_engine_session_lifecycle() {
     CHECK(counters.eval_calls == 2);
     CHECK(counters.top_logprobs_calls == 1);
     CHECK(counters.token_logprob_calls == 1);
-    CHECK(counters.rewind_calls == 1);
+    CHECK(counters.speculative_eval_calls == 1);
+    CHECK(counters.rewind_calls == 2);
     CHECK(counters.invalidate_calls == 1);
     CHECK(counters.token_live_allocations == 0);
     CHECK(counters.snapshot_live_allocations == 0);

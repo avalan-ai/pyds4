@@ -475,6 +475,21 @@ class AsyncSession:
             lambda session: session.top_logprobs(k)
         )
 
+    async def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        return await self._call_session(
+            lambda session: session.eval_speculative_argmax(
+                first_token,
+                max_tokens,
+                eos_token_id,
+            ),
+            mutating=True,
+        )
+
     async def next_token(
         self,
         options: SamplingOptions | None = None,

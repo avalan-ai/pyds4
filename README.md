@@ -328,6 +328,11 @@ python examples/generate_text_async.py \
   steering options, and native startup log replay.
 - `pyds4.SamplingOptions` configures temperature, top-k, top-p, min-p, and
   seed-based sampling.
+- `Session.eval_speculative_argmax()` and
+  `AsyncSession.eval_speculative_argmax()` expose DS4's greedy MTP speculative
+  step when the engine was opened with an MTP model and draft depth greater
+  than one. Without that per-engine MTP support, the methods raise a clear
+  `Ds4GenerationError` before mutating the session.
 - `pyds4.is_backend_available()` and `pyds4.backend_unavailable_reason()`
   report whether the installed wheel can run a requested backend.
 

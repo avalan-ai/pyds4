@@ -705,6 +705,61 @@ int ds4_session_eval(ds4_session* s, int token, char* err, size_t errlen) {
     return 0;
 }
 
+int ds4_session_eval_speculative_argmax(ds4_session* s, int first_token,
+                                        int max_tokens, int eos_token,
+                                        int* accepted, int accepted_cap,
+                                        char* err, size_t errlen) {
+    counters.last_speculative_eval_sequence = next_call();
+    counters.speculative_eval_calls++;
+    fake_delay_if_requested("eval_speculative_argmax");
+    if (env_should_fail("eval_speculative_argmax") || first_token == 13) {
+        set_error(err, errlen, "fake speculative eval failure");
+        return -1;
+    }
+    if (!s || !accepted || first_token < 0 || max_tokens <= 0 ||
+        accepted_cap <= 0) {
+        set_error(err, errlen, "invalid speculative eval request");
+        return -1;
+    }
+    if (!ds4_engine_has_mtp(s->engine) ||
+        ds4_engine_mtp_draft_tokens(s->engine) <= 1) {
+        set_error(err, errlen,
+                  "fake speculative eval requires MTP draft tokens > 1");
+        return -1;
+    }
+    if (s->checkpoint.len + 1 >= s->ctx_size) {
+        set_error(err, errlen, "prompt exceeds context");
+        return -1;
+    }
+
+    int limit = max_tokens;
+    const int mtp_draft_tokens = ds4_engine_mtp_draft_tokens(s->engine);
+    const int context_remaining = s->ctx_size - s->checkpoint.len - 1;
+    if (limit > accepted_cap)
+        limit = accepted_cap;
+    if (limit > mtp_draft_tokens)
+        limit = mtp_draft_tokens;
+    if (limit > context_remaining)
+        limit = context_remaining;
+    if (limit <= 0) {
+        set_error(err, errlen, "prompt exceeds context");
+        return -1;
+    }
+
+    int count = 0;
+    for (; count < limit; count++) {
+        const int token = first_token + count;
+        ds4_tokens_push(&s->checkpoint, token);
+        accepted[count] = token;
+        if (token == eos_token) {
+            count++;
+            break;
+        }
+    }
+    s->valid = true;
+    return count;
+}
+
 void ds4_session_invalidate(ds4_session* s) {
     counters.last_invalidate_sequence = next_call();
     counters.invalidate_calls++;

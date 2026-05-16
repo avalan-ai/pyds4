@@ -930,6 +930,34 @@ class Session:
         except RuntimeError as error:
             raise _generation_exception("top_logprobs", error) from error
 
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        _validate_token_id("first_token", first_token)
+        _validate_positive_int("max_tokens", max_tokens)
+        _validate_token_id("eos_token_id", eos_token_id)
+        try:
+            return _validate_token_list(
+                self._require_state().eval_speculative_argmax(
+                    first_token,
+                    max_tokens,
+                    eos_token_id,
+                ),
+                "eval_speculative_argmax",
+            )
+        except Ds4Error:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except RuntimeError as error:
+            raise _generation_exception(
+                "eval_speculative_argmax",
+                error,
+            ) from error
+
     def rewind(self, pos: int) -> None:
         _validate_non_negative_int("pos", pos)
         try:

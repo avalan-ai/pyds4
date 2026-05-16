@@ -240,6 +240,29 @@ int py_non_negative_int(py::handle value, const std::string& name) {
     return static_cast<int>(number);
 }
 
+int py_positive_int(py::handle value, const std::string& name) {
+    if (py::isinstance<py::bool_>(value) || !py::isinstance<py::int_>(value)) {
+        throw py::type_error(name + " must be a positive integer.");
+    }
+
+    int overflow = 0;
+    const long long number =
+        PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        throw py::value_error(name +
+                              " is outside the supported integer range.");
+    }
+    if (overflow != 0 || number > INT_MAX) {
+        throw py::value_error(name +
+                              " is outside the supported integer range.");
+    }
+    if (number <= 0) {
+        throw py::value_error(name + " must be positive.");
+    }
+    return static_cast<int>(number);
+}
+
 uint64_t py_seed(py::handle value) {
     if (value.is_none()) {
         return 0;
@@ -349,8 +372,9 @@ class EngineState : public std::enable_shared_from_this<EngineState> {
 class SessionState : public std::enable_shared_from_this<SessionState> {
   public:
     SessionState(std::shared_ptr<EngineState> engine_state,
-                 ds4_session* session)
-        : engine_state_(std::move(engine_state)), session_(session) {
+                 ds4_session* session, bool speculative_eval_supported)
+        : engine_state_(std::move(engine_state)), session_(session),
+          speculative_eval_supported_(speculative_eval_supported) {
         ds4_session_set_progress(session_, &SessionState::progress_callback,
                                  this);
     }
@@ -584,6 +608,71 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
         return result;
     }
 
+    py::list eval_speculative_argmax(py::handle first_token_id,
+                                     py::handle max_tokens_value,
+                                     py::handle eos_token_id) {
+        const int first_token = py_token_id(first_token_id, "first_token");
+        const int max_tokens = py_positive_int(max_tokens_value, "max_tokens");
+        const int eos_token = py_token_id(eos_token_id, "eos_token_id");
+
+        std::array<char, 4096> error = {};
+        std::vector<int> accepted;
+        int count = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            if (!speculative_eval_supported_) {
+                throw std::runtime_error(
+                    "eval_speculative_argmax failed: DS4 speculative eval "
+                    "requires an engine opened with MTP draft tokens > 1.");
+            }
+
+            const int current_pos = ds4_session_pos(session);
+            const int ctx_size = ds4_session_ctx(session);
+            if (ctx_size <= 0 || current_pos >= ctx_size - 1) {
+                throw std::runtime_error(
+                    "eval_speculative_argmax failed: prompt exceeds context");
+            }
+
+            const int remaining = ctx_size - current_pos - 1;
+            const int accepted_cap = std::min(max_tokens, remaining);
+            accepted.resize(static_cast<std::size_t>(accepted_cap));
+            count = ds4_session_eval_speculative_argmax(
+                session, first_token, accepted_cap, eos_token, accepted.data(),
+                accepted_cap, error.data(), error.size());
+            if (count < 0) {
+                logits_ready_ = false;
+            } else {
+                logits_ready_ = true;
+            }
+        }
+        if (count < 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_eval_speculative_argmax failed.";
+            throw std::runtime_error("eval_speculative_argmax failed: " +
+                                     message);
+        }
+        if (count <= 0 || count > static_cast<int>(accepted.size())) {
+            throw std::runtime_error(
+                "eval_speculative_argmax failed: DS4 returned invalid "
+                "accepted token count.");
+        }
+
+        py::list result;
+        for (int i = 0; i < count; ++i) {
+            const int token = accepted[static_cast<std::size_t>(i)];
+            if (token < 0) {
+                throw std::runtime_error(
+                    "eval_speculative_argmax failed: DS4 returned invalid "
+                    "token id.");
+            }
+            result.append(token);
+        }
+        return result;
+    }
+
     void rewind(py::handle pos_value) {
         const int rewind_pos = py_non_negative_int(pos_value, "pos");
         {
@@ -808,6 +897,7 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
     ds4_session* session_ = nullptr;
     std::optional<uint64_t> rng_state_;
     bool logits_ready_ = false;
+    bool speculative_eval_supported_ = false;
     mutable std::mutex mutex_;
     std::vector<ProgressEvent> progress_events_;
     int progress_wakeup_fd_ = -1;
@@ -895,8 +985,10 @@ std::shared_ptr<SessionState> EngineState::create_session(int ctx_size) {
         result = ds4_session_create(&opened, get_locked(), ctx_size);
         if (result == 0 && opened != nullptr) {
             try {
-                session =
-                    std::make_shared<SessionState>(shared_from_this(), opened);
+                const bool speculative_eval_supported =
+                    ds4_engine_mtp_draft_tokens(get_locked()) > 1;
+                session = std::make_shared<SessionState>(
+                    shared_from_this(), opened, speculative_eval_supported);
                 sessions_.push_back(session);
                 opened = nullptr;
             } catch (...) {
@@ -1155,6 +1247,9 @@ PYBIND11_MODULE(_native, module) {
         .def("token_logprob", &SessionState::token_logprob,
              py::arg("token_id"))
         .def("top_logprobs", &SessionState::top_logprobs, py::arg("k"))
+        .def("eval_speculative_argmax", &SessionState::eval_speculative_argmax,
+             py::arg("first_token"), py::arg("max_tokens"),
+             py::arg("eos_token_id"))
         .def("rewind", &SessionState::rewind, py::arg("pos"))
         .def("save_snapshot", &SessionState::save_snapshot)
         .def("load_snapshot", &SessionState::load_snapshot,
@@ -1184,6 +1279,7 @@ PYBIND11_MODULE(_native, module) {
         result["sample_calls"] = counters.sample_calls;
         result["top_logprobs_calls"] = counters.top_logprobs_calls;
         result["token_logprob_calls"] = counters.token_logprob_calls;
+        result["speculative_eval_calls"] = counters.speculative_eval_calls;
         result["rewind_calls"] = counters.rewind_calls;
         result["invalidate_calls"] = counters.invalidate_calls;
         result["payload_bytes_calls"] = counters.payload_bytes_calls;
@@ -1223,6 +1319,8 @@ PYBIND11_MODULE(_native, module) {
             counters.last_top_logprobs_sequence;
         result["last_token_logprob_sequence"] =
             counters.last_token_logprob_sequence;
+        result["last_speculative_eval_sequence"] =
+            counters.last_speculative_eval_sequence;
         result["last_rewind_sequence"] = counters.last_rewind_sequence;
         result["last_invalidate_sequence"] = counters.last_invalidate_sequence;
         result["last_payload_bytes_sequence"] =

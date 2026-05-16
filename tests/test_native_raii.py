@@ -53,7 +53,7 @@ def test_fake_native_capabilities_match_bound_runtime_surface() -> None:
     assert caps.payloads is True
     assert caps.logprobs is True
     assert caps.top_logprobs is True
-    assert caps.speculative_eval is False
+    assert caps.speculative_eval is True
     assert counters()["engine_open_calls"] == 0
     assert counters()["session_create_calls"] == 0
 
@@ -383,6 +383,109 @@ def test_token_logprob_can_be_requested_before_eval() -> None:
     session.eval(token_id)
     assert session.pos == 3
     assert counters()["token_logprob_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+def test_speculative_eval_argmax_advances_expected_tokens() -> None:
+    engine = make_engine(mtp_path="mtp.gguf", mtp_draft_tokens=4)
+    session = engine.create_session(64)
+    session.sync([1, 2])
+
+    accepted = session.eval_speculative_argmax(
+        1000 + ord("A"),
+        3,
+        engine.eos_token_id,
+    )
+
+    assert accepted == [
+        1000 + ord("A"),
+        1000 + ord("B"),
+        1000 + ord("C"),
+    ]
+    assert session.tokens == [1, 2, *accepted]
+    counts = counters()
+    assert counts["speculative_eval_calls"] == 1
+    assert counts["eval_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_speculative_eval_argmax_requires_mtp_draft_tokens() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises(
+        pyds4.Ds4GenerationError,
+        match="requires an engine opened with MTP draft tokens > 1",
+    ):
+        session.eval_speculative_argmax(
+            1000 + ord("A"),
+            2,
+            engine.eos_token_id,
+        )
+
+    assert counters()["speculative_eval_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize(
+    ("first_token", "max_tokens", "eos_token_id"),
+    [
+        (True, 2, 6),
+        (-1, 2, 6),
+        (1000 + ord("A"), False, 6),
+        (1000 + ord("A"), 0, 6),
+        (1000 + ord("A"), 2, True),
+        (1000 + ord("A"), 2, -1),
+    ],
+)
+def test_speculative_eval_argmax_rejects_invalid_inputs_before_native_call(
+    first_token: object,
+    max_tokens: object,
+    eos_token_id: object,
+) -> None:
+    engine = make_engine(mtp_path="mtp.gguf", mtp_draft_tokens=4)
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises((TypeError, ValueError)):
+        session.eval_speculative_argmax(  # type: ignore[arg-type]
+            first_token,
+            max_tokens,
+            eos_token_id,
+        )
+
+    assert counters()["speculative_eval_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_speculative_eval_argmax_native_failure_maps_to_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = make_engine(mtp_path="mtp.gguf", mtp_draft_tokens=4)
+    session = engine.create_session(64)
+    session.sync([1])
+    monkeypatch.setenv("PYDS4_FAKE_FAIL_EVAL_SPECULATIVE_ARGMAX", "1")
+
+    with pytest.raises(
+        pyds4.Ds4GenerationError,
+        match="eval_speculative_argmax failed: fake speculative eval failure",
+    ):
+        session.eval_speculative_argmax(
+            1000 + ord("A"),
+            2,
+            engine.eos_token_id,
+        )
+
+    assert counters()["speculative_eval_calls"] == 1
 
     session.close()
     engine.close()

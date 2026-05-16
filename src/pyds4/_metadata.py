@@ -40,6 +40,7 @@ REQUIRED_C_SYMBOLS = (
     "ds4_session_top_logprobs",
     "ds4_session_token_logprob",
     "ds4_session_eval",
+    "ds4_session_eval_speculative_argmax",
     "ds4_session_invalidate",
     "ds4_session_rewind",
     "ds4_session_pos",

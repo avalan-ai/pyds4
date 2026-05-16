@@ -75,6 +75,14 @@ class _SessionState:
     def top_logprobs(self, k: int) -> object:
         return [(True, -0.25)]
 
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> object:
+        return object()
+
     def save_snapshot(self) -> object:
         return "not bytes"
 
@@ -164,6 +172,14 @@ class _FailingSessionState:
         raise RuntimeError("native detail")
 
     def top_logprobs(self, k: int) -> list[tuple[int, float]]:
+        raise RuntimeError("native detail")
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
         raise RuntimeError("native detail")
 
     def rewind(self, pos: int) -> None:
@@ -320,6 +336,7 @@ def test_session_rejects_malformed_native_inspection_values(
         ("sample", (pyds4.SamplingOptions(),)),
         ("token_logprob", (1,)),
         ("top_logprobs", (1,)),
+        ("eval_speculative_argmax", (1, 1, 6)),
         ("save_snapshot", ()),
         ("save_payload", ()),
     ],
@@ -344,6 +361,7 @@ def test_session_rejects_malformed_native_token_results(
         ("sample", (pyds4.SamplingOptions(),)),
         ("token_logprob", (1,)),
         ("top_logprobs", (1,)),
+        ("eval_speculative_argmax", (1, 1, 6)),
         ("rewind", (0,)),
         ("save_snapshot", ()),
         ("load_snapshot", (b"snapshot",)),

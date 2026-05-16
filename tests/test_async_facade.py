@@ -84,6 +84,20 @@ class RecordingSession:
             pyds4.TokenScore(token_id=102, logprob=-1.25),
         ][:k]
 
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        self._record(
+            "session.eval_speculative_argmax:"
+            f"{first_token}:{max_tokens}:{eos_token_id}"
+        )
+        accepted = list(range(first_token, first_token + max_tokens))
+        self._tokens.extend(accepted)
+        return accepted
+
     def rewind(self, pos: int) -> None:
         self._record(f"session.rewind:{pos}")
         del self._tokens[pos:]
@@ -312,6 +326,30 @@ class _ValidatingSessionState:
             raise ValueError("k must be non-negative.")
         return [pyds4.TokenScore(token_id=101, logprob=-0.25)][:k]
 
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        if isinstance(first_token, bool) or not isinstance(first_token, int):
+            raise TypeError("first_token must be an integer token id.")
+        if first_token < 0:
+            raise ValueError("first_token must be non-negative.")
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
+            raise TypeError("max_tokens must be a positive integer.")
+        if max_tokens <= 0:
+            raise ValueError("max_tokens must be a positive integer.")
+        if isinstance(eos_token_id, bool) or not isinstance(eos_token_id, int):
+            raise TypeError("eos_token_id must be an integer token id.")
+        if eos_token_id < 0:
+            raise ValueError("eos_token_id must be non-negative.")
+
+        accepted = list(range(first_token, first_token + max_tokens))
+        self.tokens.extend(accepted)
+        self.pos = len(self.tokens)
+        return accepted
+
     def rewind(self, pos: int) -> None:
         del self.tokens[pos:]
         self.pos = len(self.tokens)
@@ -460,6 +498,14 @@ class _FailingSessionState(_ValidatingSessionState):
         raise RuntimeError("native detail")
 
     def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
+        raise RuntimeError("native detail")
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
         raise RuntimeError("native detail")
 
     def rewind(self, pos: int) -> None:
@@ -709,8 +755,13 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
                     pyds4.TokenScore(token_id=101, logprob=-0.25),
                     pyds4.TokenScore(token_id=102, logprob=-1.25),
                 ]
+                assert await session.eval_speculative_argmax(110, 2, 6) == [
+                    110,
+                    111,
+                ]
+                assert await session.tokens == [1, 2, 110, 111]
                 await session.eval(104)
-                assert await session.tokens == [1, 2, 104]
+                assert await session.tokens == [1, 2, 110, 111, 104]
                 assert await session.save_snapshot() == b"snapshot"
                 await session.load_snapshot(b"snapshot")
                 assert await session.tokens == [7]
@@ -742,6 +793,8 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
         "session.sample:7",
         "session.token_logprob:101",
         "session.top_logprobs:2",
+        "session.eval_speculative_argmax:110:2:6",
+        "session.tokens",
         "session.eval",
         "session.tokens",
         "session.save_snapshot",
@@ -805,6 +858,23 @@ def test_async_session_methods_mirror_sync_validation_errors(
 
                 with pytest.raises(ValueError, match="k"):
                     await session.top_logprobs(-1)
+
+                with pytest.raises(TypeError, match="first_token"):
+                    await session.eval_speculative_argmax(  # type: ignore[arg-type]
+                        True,
+                        2,
+                        6,
+                    )
+
+                with pytest.raises(ValueError, match="max_tokens"):
+                    await session.eval_speculative_argmax(101, 0, 6)
+
+                with pytest.raises(TypeError, match="eos_token_id"):
+                    await session.eval_speculative_argmax(  # type: ignore[arg-type]
+                        101,
+                        2,
+                        True,
+                    )
 
                 with pytest.raises(TypeError, match="pos"):
                     await session.rewind(False)  # type: ignore[arg-type]
@@ -886,6 +956,10 @@ def test_async_session_properties_mirror_sync_validation_errors(
         ("sample", lambda session: session.sample(pyds4.SamplingOptions())),
         ("token_logprob", lambda session: session.token_logprob(1)),
         ("top_logprobs", lambda session: session.top_logprobs(1)),
+        (
+            "eval_speculative_argmax",
+            lambda session: session.eval_speculative_argmax(1, 1, 6),
+        ),
         ("rewind", lambda session: session.rewind(0)),
         ("save_snapshot", lambda session: session.save_snapshot()),
         ("load_snapshot", lambda session: session.load_snapshot(b"snapshot")),
@@ -1381,6 +1455,42 @@ def test_async_fake_native_snapshot_and_payload_round_trip() -> None:
         assert counts["save_payload_calls"] >= 2
         assert counts["load_payload_calls"] >= 2
         assert counts["snapshot_live_allocations"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_async_fake_native_speculative_eval_runs_on_owner_thread() -> None:
+    native = pytest.importorskip("pyds4._native")
+    if not getattr(native, "__ds4_fake_native__", False):
+        pytest.skip("requires a PYDS4_USE_FAKE_DS4 build")
+
+    async def scenario() -> None:
+        native.fake_reset_counters()
+        options = pyds4.EngineOptions(
+            model_path="model.gguf",
+            backend="cpu",
+            mtp_path="mtp.gguf",
+            mtp_draft_tokens=4,
+        )
+
+        async with pyds4.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                accepted = await session.eval_speculative_argmax(
+                    1000 + ord("A"),
+                    3,
+                    await engine.eos_token_id,
+                )
+                assert accepted == [
+                    1000 + ord("A"),
+                    1000 + ord("B"),
+                    1000 + ord("C"),
+                ]
+                assert await session.tokens == [1, 2, *accepted]
+
+        counts = dict(native.fake_counters())
+        assert counts["speculative_eval_calls"] == 1
+        assert counts["eval_calls"] == 0
 
     asyncio.run(scenario())
 
