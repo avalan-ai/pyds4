@@ -480,7 +480,8 @@ class Engine:
                         options.warm_weights,
                         options.quality,
                     )
-                _replay_native_stderr(captured_stderr.text)
+                if options.native_log:
+                    _replay_native_stderr(captured_stderr.text)
         except (Ds4BackendUnavailable, Ds4InvalidModel, Ds4LoadError):
             raise
         except RuntimeError as error:

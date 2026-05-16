@@ -18,6 +18,7 @@ def test_public_type_defaults_and_enum_coercion() -> None:
     assert options.n_threads == 0
     assert options.warm_weights is False
     assert options.quality is False
+    assert options.native_log is True
 
     sampling = pyds4.SamplingOptions()
     assert sampling.temperature == 0.0
@@ -226,6 +227,7 @@ def test_engine_options_reject_non_finite_float_options(
     [
         {"warm_weights": 1},
         {"quality": "yes"},
+        {"native_log": "yes"},
     ],
 )
 def test_engine_options_reject_non_boolean_flags(

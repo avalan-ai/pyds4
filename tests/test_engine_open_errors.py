@@ -296,6 +296,64 @@ def test_native_engine_open_stderr_participates_in_error_mapping(
     assert "metal backend unavailable" in message
 
 
+def test_native_engine_open_replays_stderr_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    model_path = _write_gguf_header(tmp_path / "model.gguf")
+
+    class Native:
+        __ds4_fake_native__ = False
+
+        class EngineState:
+            def __init__(self, *_: object) -> None:
+                os.write(2, b"ds4: native startup detail\n")
+
+            def close(self) -> None:
+                pass
+
+    monkeypatch.setattr(native, "_native", Native)
+
+    engine = pyds4.Engine(
+        pyds4.EngineOptions(model_path=str(model_path), backend="cpu")
+    )
+
+    engine.close()
+    assert "ds4: native startup detail" in capfd.readouterr().err
+
+
+def test_native_engine_open_can_suppress_success_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    model_path = _write_gguf_header(tmp_path / "model.gguf")
+
+    class Native:
+        __ds4_fake_native__ = False
+
+        class EngineState:
+            def __init__(self, *_: object) -> None:
+                os.write(2, b"ds4: native startup detail\n")
+
+            def close(self) -> None:
+                pass
+
+    monkeypatch.setattr(native, "_native", Native)
+
+    engine = pyds4.Engine(
+        pyds4.EngineOptions(
+            model_path=str(model_path),
+            backend="cpu",
+            native_log=False,
+        )
+    )
+
+    engine.close()
+    assert "ds4: native startup detail" not in capfd.readouterr().err
+
+
 def test_native_ds4_model_compatibility_message_maps_to_invalid_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

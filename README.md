@@ -325,7 +325,7 @@ python examples/generate_text_async.py \
 - `pyds4.AsyncEngine` and `pyds4.AsyncSession` provide an asyncio facade for
   applications that need incremental streaming.
 - `pyds4.EngineOptions` configures model path, backend, MTP options, threading,
-  and steering options.
+  steering options, and native startup log replay.
 - `pyds4.SamplingOptions` configures temperature, top-k, top-p, min-p, and
   seed-based sampling.
 - `pyds4.is_backend_available()` and `pyds4.backend_unavailable_reason()`

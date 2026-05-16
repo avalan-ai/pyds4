@@ -99,6 +99,7 @@ class EngineOptions:
     directional_steering_ffn: float = 0.0
     warm_weights: bool = False
     quality: bool = False
+    native_log: bool = True
 
     def __post_init__(self) -> None:
         _validate_str("model_path", self.model_path)
@@ -131,6 +132,7 @@ class EngineOptions:
         )
         _validate_bool("warm_weights", self.warm_weights)
         _validate_bool("quality", self.quality)
+        _validate_bool("native_log", self.native_log)
 
 
 @dataclass(frozen=True, slots=True)

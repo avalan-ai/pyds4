@@ -1,6 +1,6 @@
 .PHONY: all bridge build install install-dev fake-bridge ds4-bridge format format-python format-cpp lint lint-python lint-cpp lint-cpp-format lint-cpp-tidy lint-cpp-cppcheck cmake-cpp-lint test test-python test-cpp test-cpp-sanitizers tests mypy typecheck release-tools sdist wheel dist pip-check wheel-smoke
 
-PYTHON ?= python
+PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python)
 PIP ?= $(PYTHON) -m pip
 PYTEST ?= $(PYTHON) -m pytest
 RUFF ?= $(PYTHON) -m ruff
@@ -9,8 +9,8 @@ MYPY ?= $(PYTHON) -m mypy
 CMAKE ?= cmake
 CTEST ?= ctest
 CLANG_FORMAT ?= $(or $(shell command -v clang-format 2>/dev/null),$(shell xcrun --find clang-format 2>/dev/null),clang-format)
-CLANG_TIDY ?= $(or $(shell command -v clang-tidy 2>/dev/null),clang-tidy)
-CPPCHECK ?= $(or $(shell command -v cppcheck 2>/dev/null),cppcheck)
+CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null)
+CPPCHECK ?= $(shell command -v cppcheck 2>/dev/null)
 PYTHON_SOURCES ?= src/ tests/ scripts/ examples/
 CXX_FORMAT_SOURCES ?= \
 	src/pyds4/_native.cpp \
@@ -86,15 +86,25 @@ lint-cpp-format:
 cmake-cpp-lint:
 	$(CMAKE) -S . -B "$(CXX_LINT_BUILD_DIR)" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPYDS4_BUILD_PYTHON_EXTENSION=ON -DPYDS4_BUILD_CXX_TESTS=ON -DPYDS4_USE_FAKE_DS4=ON -DPYDS4_BACKEND=cpu $(if $(PYBIND11_DIR),-Dpybind11_DIR="$(PYBIND11_DIR)")
 
-lint-cpp-tidy: cmake-cpp-lint
-	$(CLANG_TIDY) -p "$(CXX_LINT_BUILD_DIR)" $(CXX_TIDY_SOURCES)
+lint-cpp-tidy:
+	@if [ -z "$(CLANG_TIDY)" ]; then \
+		echo "Skipping clang-tidy: clang-tidy not found"; \
+	else \
+		$(MAKE) cmake-cpp-lint; \
+		$(CLANG_TIDY) -p "$(CXX_LINT_BUILD_DIR)" $(CXX_TIDY_SOURCES); \
+	fi
 
-lint-cpp-cppcheck: cmake-cpp-lint
-	$(CPPCHECK) --project="$(CXX_LINT_BUILD_DIR)/compile_commands.json" \
-		--enable=warning,style,performance,portability \
-		--error-exitcode=1 \
-		--inline-suppr \
-		--suppress=missingIncludeSystem
+lint-cpp-cppcheck:
+	@if [ -z "$(CPPCHECK)" ]; then \
+		echo "Skipping cppcheck: cppcheck not found"; \
+	else \
+		$(MAKE) cmake-cpp-lint; \
+		$(CPPCHECK) --project="$(CXX_LINT_BUILD_DIR)/compile_commands.json" \
+			--enable=warning,style,performance,portability \
+			--error-exitcode=1 \
+			--inline-suppr \
+			--suppress=missingIncludeSystem; \
+	fi
 
 mypy:
 	$(MYPY)
