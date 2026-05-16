@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
@@ -65,6 +66,15 @@ def _validate_optional_int(
     if value is None:
         return
     _validate_int(name, value, minimum=minimum, maximum=maximum)
+
+
+def _validate_str_tuple(name: str, value: Iterable[str]) -> tuple[str, ...]:
+    if isinstance(value, (bytes, str)) or not isinstance(value, Iterable):
+        raise TypeError(f"{name} must be an iterable of strings.")
+    result = tuple(value)
+    for item in result:
+        _validate_str(f"{name} item", item)
+    return result
 
 
 def _validate_real(
@@ -151,6 +161,46 @@ class SamplingOptions:
         _validate_real("top_p", self.top_p, minimum=0.0, maximum=1.0)
         _validate_real("min_p", self.min_p, minimum=0.0, maximum=1.0)
         _validate_optional_int("seed", self.seed)
+
+
+@dataclass(frozen=True, slots=True)
+class Ds4Capabilities:
+    """Report import-safe DS4 runtime capabilities for this pyds4 build."""
+
+    backend: str
+    ds4_commit: str
+    ds4_api_version: int | None
+    required_symbols: tuple[str, ...]
+    available_backends: tuple[str, ...]
+    snapshots: bool
+    payloads: bool
+    logprobs: bool
+    top_logprobs: bool
+    progress: bool
+    mtp: bool
+    speculative_eval: bool
+
+    def __post_init__(self) -> None:
+        _validate_str("backend", self.backend)
+        _validate_str("ds4_commit", self.ds4_commit)
+        _validate_optional_int("ds4_api_version", self.ds4_api_version)
+        object.__setattr__(
+            self,
+            "required_symbols",
+            _validate_str_tuple("required_symbols", self.required_symbols),
+        )
+        object.__setattr__(
+            self,
+            "available_backends",
+            _validate_str_tuple("available_backends", self.available_backends),
+        )
+        _validate_bool("snapshots", self.snapshots)
+        _validate_bool("payloads", self.payloads)
+        _validate_bool("logprobs", self.logprobs)
+        _validate_bool("top_logprobs", self.top_logprobs)
+        _validate_bool("progress", self.progress)
+        _validate_bool("mtp", self.mtp)
+        _validate_bool("speculative_eval", self.speculative_eval)
 
 
 @dataclass(frozen=True, slots=True)

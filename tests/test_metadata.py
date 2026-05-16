@@ -12,6 +12,44 @@ import pytest
 import pyds4
 from pyds4 import _version, availability
 
+_DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES = frozenset(
+    (
+        "AsyncEngine",
+        "AsyncSession",
+        "Backend",
+        "DS4_API_VERSION",
+        "DS4_COMMIT",
+        "Ds4Capabilities",
+        "Ds4ApiVersionError",
+        "Ds4BackendUnavailable",
+        "Ds4Cancelled",
+        "Ds4ContextError",
+        "Ds4Error",
+        "Ds4GenerationError",
+        "Ds4InvalidModel",
+        "Ds4LoadError",
+        "Engine",
+        "EngineOptions",
+        "GenerationStep",
+        "ProgressEvent",
+        "REQUIRED_C_SYMBOLS",
+        "SamplingOptions",
+        "Session",
+        "ThinkMode",
+        "__ds4_api_version__",
+        "__ds4_available_backends__",
+        "__ds4_commit__",
+        "__ds4_import_safe__",
+        "__ds4_native_backend__",
+        "__ds4_symbols__",
+        "__version__",
+        "backend_unavailable_reason",
+        "capabilities",
+        "is_backend_available",
+        "think_mode_for_context",
+    )
+)
+
 
 def test_import_safe_metadata() -> None:
     assert pyds4.__version__ == "0.1.0"
@@ -25,6 +63,27 @@ def test_required_symbols_are_exposed_as_collection() -> None:
     assert isinstance(pyds4.__ds4_symbols__, Collection)
     assert not isinstance(pyds4.__ds4_symbols__, (bytes, str))
     assert set(pyds4.REQUIRED_C_SYMBOLS) <= set(pyds4.__ds4_symbols__)
+
+
+def test_documented_top_level_public_names_are_importable() -> None:
+    exported_names = set(pyds4.__all__)
+
+    missing_exports = sorted(
+        _DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES - exported_names
+    )
+    assert missing_exports == []
+
+    undocumented_exports = sorted(
+        exported_names - _DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES
+    )
+    assert undocumented_exports == []
+
+    missing_attributes = [
+        name
+        for name in sorted(_DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES)
+        if not hasattr(pyds4, name)
+    ]
+    assert missing_attributes == []
 
 
 def test_import_does_not_instantiate_engine_or_expose_native_open() -> None:
@@ -87,6 +146,75 @@ def test_backend_availability_is_limited_to_selected_backend() -> None:
     assert "CPU mode is diagnostic/reference only" in reason
 
 
+def test_capabilities_report_import_safe_runtime_surface() -> None:
+    caps = pyds4.capabilities()
+
+    assert isinstance(caps, pyds4.Ds4Capabilities)
+    assert caps.backend == pyds4.__ds4_native_backend__
+    assert caps.ds4_commit == pyds4.__ds4_commit__
+    assert caps.ds4_api_version == pyds4.__ds4_api_version__
+    assert caps.required_symbols == tuple(pyds4.REQUIRED_C_SYMBOLS)
+    assert caps.available_backends == tuple(pyds4.__ds4_available_backends__)
+
+    runtime_available = pyds4.is_backend_available(caps.backend)
+    native = pytest.importorskip("pyds4._native")
+    session_type = getattr(native, "SessionState", None)
+    engine_type = getattr(native, "EngineState", None)
+
+    def has_methods(target: object, *names: str) -> bool:
+        return target is not None and all(
+            callable(getattr(target, name, None)) for name in names
+        )
+
+    def has_attributes(target: object, *names: str) -> bool:
+        return target is not None and all(
+            hasattr(target, name) for name in names
+        )
+
+    assert caps.snapshots is (
+        runtime_available
+        and has_methods(session_type, "save_snapshot", "load_snapshot")
+    )
+    assert caps.payloads is (
+        runtime_available
+        and has_methods(session_type, "save_payload", "load_payload")
+    )
+    assert caps.logprobs is (
+        runtime_available and has_methods(session_type, "token_logprob")
+    )
+    assert caps.top_logprobs is (
+        runtime_available and has_methods(session_type, "top_logprobs")
+    )
+    assert caps.progress is (
+        runtime_available
+        and has_methods(
+            session_type,
+            "set_progress_wakeup_fd",
+            "drain_progress_events",
+        )
+    )
+    assert caps.mtp is (
+        runtime_available
+        and has_attributes(engine_type, "has_mtp", "mtp_draft_tokens")
+    )
+    assert caps.speculative_eval is (
+        runtime_available
+        and has_methods(session_type, "eval_speculative_argmax")
+    )
+
+
+def test_capabilities_do_not_open_engine_or_session() -> None:
+    import pyds4.native as native
+
+    engine_calls = native.ENGINE_CONSTRUCTOR_CALLS
+    session_calls = native.SESSION_CONSTRUCTOR_CALLS
+
+    pyds4.capabilities()
+
+    assert native.ENGINE_CONSTRUCTOR_CALLS == engine_calls
+    assert native.SESSION_CONSTRUCTOR_CALLS == session_calls
+
+
 def test_available_backends_require_native_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -133,6 +261,33 @@ def test_unknown_backend_is_unavailable_with_reason() -> None:
     assert "macOS arm64 + Metal" in reason
     assert "Linux + CUDA" in reason
     assert "CPU mode is diagnostic/reference only" in reason
+
+
+def test_capabilities_reject_missing_required_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyds4 import _capabilities
+
+    symbols = tuple(
+        symbol
+        for symbol in pyds4.REQUIRED_C_SYMBOLS
+        if symbol != "ds4_session_eval"
+    )
+    monkeypatch.setattr(_capabilities, "__ds4_symbols__", symbols)
+
+    with pytest.raises(pyds4.Ds4ApiVersionError, match="ds4_session_eval"):
+        pyds4.capabilities()
+
+
+def test_capabilities_reject_malformed_symbol_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyds4 import _capabilities
+
+    monkeypatch.setattr(_capabilities, "__ds4_symbols__", "ds4_engine_open")
+
+    with pytest.raises(pyds4.Ds4ApiVersionError, match="__ds4_symbols__"):
+        pyds4.capabilities()
 
 
 def test_built_backend_is_unavailable_when_native_extension_fails(
@@ -248,6 +403,55 @@ def test_import_remains_safe_when_built_native_extension_cannot_load() -> None:
         "True",
         "Ds4BackendUnavailable",
         "True",
+    ]
+
+
+def test_source_tree_capabilities_are_import_safe_without_native() -> None:
+    env = os.environ.copy()
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = src_path
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            dedent("""
+                import pyds4
+                import pyds4.native as native
+
+                caps = pyds4.capabilities()
+
+                print(pyds4.__ds4_import_safe__)
+                print(caps.available_backends)
+                print(caps.snapshots)
+                print(caps.payloads)
+                print(caps.logprobs)
+                print(caps.top_logprobs)
+                print(caps.progress)
+                print(caps.mtp)
+                print(caps.speculative_eval)
+                print(native.ENGINE_CONSTRUCTOR_CALLS)
+                print(native.SESSION_CONSTRUCTOR_CALLS)
+                """),
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.splitlines() == [
+        "True",
+        "()",
+        "False",
+        "False",
+        "False",
+        "False",
+        "False",
+        "False",
+        "False",
+        "0",
+        "0",
     ]
 
 

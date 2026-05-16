@@ -1,5 +1,6 @@
 """Import-safe Python surface for the DS4 native binding."""
 
+from ._capabilities import capabilities
 from ._metadata import (
     DS4_API_VERSION,
     DS4_COMMIT,
@@ -33,6 +34,7 @@ from .native import Engine, Session
 from .thinking import think_mode_for_context
 from .types import (
     Backend,
+    Ds4Capabilities,
     EngineOptions,
     GenerationStep,
     ProgressEvent,
@@ -47,6 +49,7 @@ __all__ = [
     "Backend",
     "AsyncEngine",
     "AsyncSession",
+    "Ds4Capabilities",
     "DS4_API_VERSION",
     "DS4_COMMIT",
     "Ds4ApiVersionError",
@@ -73,6 +76,7 @@ __all__ = [
     "__ds4_symbols__",
     "__version__",
     "backend_unavailable_reason",
+    "capabilities",
     "is_backend_available",
     "think_mode_for_context",
 ]

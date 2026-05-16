@@ -40,6 +40,23 @@ def text_tokens(text: str) -> list[int]:
     return [1000 + ord(char) for char in text]
 
 
+def test_fake_native_capabilities_match_bound_runtime_surface() -> None:
+    caps = pyds4.capabilities()
+
+    assert caps.backend == "cpu"
+    assert caps.available_backends == ("cpu",)
+    assert caps.required_symbols == tuple(pyds4.REQUIRED_C_SYMBOLS)
+    assert caps.progress is True
+    assert caps.mtp is True
+    assert caps.snapshots is False
+    assert caps.payloads is False
+    assert caps.logprobs is False
+    assert caps.top_logprobs is False
+    assert caps.speculative_eval is False
+    assert counters()["engine_open_calls"] == 0
+    assert counters()["session_create_calls"] == 0
+
+
 def test_engine_and_session_close_are_idempotent() -> None:
     engine = make_engine()
     session = engine.create_session(64)

@@ -40,6 +40,29 @@ def test_public_type_defaults_and_enum_coercion() -> None:
     assert custom_sampling.min_p == 0.05
     assert custom_sampling.seed == 123
 
+    capabilities = pyds4.Ds4Capabilities(
+        backend="cpu",
+        ds4_commit="commit",
+        ds4_api_version=None,
+        required_symbols=["ds4_engine_open", "ds4_session_eval"],
+        available_backends=["cpu"],
+        snapshots=False,
+        payloads=False,
+        logprobs=False,
+        top_logprobs=False,
+        progress=True,
+        mtp=True,
+        speculative_eval=False,
+    )
+    assert capabilities.backend == "cpu"
+    assert capabilities.required_symbols == (
+        "ds4_engine_open",
+        "ds4_session_eval",
+    )
+    assert capabilities.available_backends == ("cpu",)
+    assert capabilities.progress is True
+    assert capabilities.mtp is True
+
     step = pyds4.GenerationStep(token_id=5, is_eos=False, advanced=True)
     assert step.token_id == 5
     assert step.is_eos is False
@@ -58,6 +81,20 @@ def test_public_type_defaults_and_enum_coercion() -> None:
 
 def test_public_types_are_frozen_and_slotted() -> None:
     options = pyds4.EngineOptions(model_path="model.gguf")
+    capabilities = pyds4.Ds4Capabilities(
+        backend="cpu",
+        ds4_commit="commit",
+        ds4_api_version=None,
+        required_symbols=(),
+        available_backends=(),
+        snapshots=False,
+        payloads=False,
+        logprobs=False,
+        top_logprobs=False,
+        progress=False,
+        mtp=False,
+        speculative_eval=False,
+    )
     step = pyds4.GenerationStep(
         token_id=7,
         is_eos=False,
@@ -75,6 +112,12 @@ def test_public_types_are_frozen_and_slotted() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         options.extra = True  # type: ignore[attr-defined]
+
+    with pytest.raises(FrozenInstanceError):
+        capabilities.backend = "metal"  # type: ignore[misc]
+
+    with pytest.raises((AttributeError, TypeError)):
+        capabilities.extra = True  # type: ignore[attr-defined]
 
     with pytest.raises(FrozenInstanceError):
         step.token_id = 8  # type: ignore[misc]
