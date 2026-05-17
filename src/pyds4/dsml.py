@@ -769,7 +769,9 @@ def _parse_calls(block: str) -> tuple[tuple[DsmlToolCall, ...], str | None]:
         if not match:
             return tuple(calls), None
 
-        attrs = _parse_attrs(match.group(1))
+        attrs, attr_error = _parse_attrs("invoke", match.group(1))
+        if attr_error is not None:
+            return (), attr_error
         name = attrs.get("name")
         if not name:
             return (), "invoke tag is missing a name attribute"
@@ -809,7 +811,9 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
         if not param_match:
             return arguments, "parameter tag is missing a close tag"
 
-        attrs = _parse_attrs(param_match.group(1))
+        attrs, attr_error = _parse_attrs("parameter", param_match.group(1))
+        if attr_error is not None:
+            return arguments, attr_error
         name = attrs.get("name")
         if not name:
             return arguments, "parameter tag is missing a name attribute"
@@ -853,11 +857,37 @@ def _parameter_end_after(text: str, index: int) -> int:
     return index
 
 
-def _parse_attrs(text: str) -> dict[str, str]:
-    return {
-        name: html.unescape(double_quoted or single_quoted)
-        for name, double_quoted, single_quoted in _ATTR_RE.findall(text)
-    }
+def _parse_attrs(
+    tag_name: str,
+    text: str,
+) -> tuple[dict[str, str], str | None]:
+    attrs: dict[str, str] = {}
+    position = 0
+    while position < len(text):
+        space_match = re.match(r"\s*", text[position:])
+        whitespace_length = 0
+        if space_match is not None:
+            whitespace_length = space_match.end()
+            position += whitespace_length
+        if position >= len(text):
+            return attrs, None
+        if whitespace_length == 0:
+            return (
+                {},
+                f"{tag_name} tag contains malformed attribute syntax",
+            )
+
+        attr_match = _ATTR_RE.match(text, position)
+        if attr_match is None:
+            return (
+                {},
+                f"{tag_name} tag contains malformed attribute syntax",
+            )
+        name, double_quoted, single_quoted = attr_match.groups()
+        value = double_quoted if double_quoted is not None else single_quoted
+        attrs[name] = html.unescape(value or "")
+        position = attr_match.end()
+    return attrs, None
 
 
 def _render_parameter(name: str, value: JsonValue) -> str:

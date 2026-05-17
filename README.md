@@ -343,8 +343,9 @@ python examples/generate_text_async.py \
   extraction, tool-call start buffering, and buffer-state classification for
   growing DSML blocks. Generated DSML parsing accepts canonical DS4 markers
   and the documented plain XML fallback, including XML-style quoted
-  attributes. These helpers do not import Avalan or native DS4 extension
-  objects.
+  attributes, while rejecting malformed attribute syntax instead of silently
+  changing parameter semantics. These helpers do not import Avalan or native
+  DS4 extension objects.
 - `pyds4.kv_cache` provides import-safe disk KV cache key and metadata helpers
   for DS4 payload bytes. Entries are keyed by model namespace, context size,
   token count, and rendered prompt token IDs; rendered prompt text is stored

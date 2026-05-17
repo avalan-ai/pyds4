@@ -621,7 +621,25 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "</invoke>"
                 "</tool_calls>"
             ),
-            "missing a name",
+            "invoke tag contains malformed attribute syntax",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator" mode=fast>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "invoke tag contains malformed attribute syntax",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator"id="call_1">'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "invoke tag contains malformed attribute syntax",
         ),
         (
             (
@@ -632,6 +650,16 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "</｜DSML｜tool_calls>"
             ),
             "parameter tag is missing a name",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="value" string=false>{"x":1}</parameter>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "parameter tag contains malformed attribute syntax",
         ),
         (
             (
