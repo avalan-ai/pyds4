@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 from dataclasses import replace
@@ -40,6 +41,35 @@ class PayloadSession:
         self.live_tokens = [99]
 
     def save_payload(self) -> bytes:
+        self.saved += 1
+        return self.payload
+
+
+class AsyncPayloadSession:
+    def __init__(
+        self,
+        *,
+        payload: bytes = b"payload",
+        fail_load: bool = False,
+    ) -> None:
+        self.payload = payload
+        self.fail_load = fail_load
+        self.loaded_payloads: list[bytes] = []
+        self.saved = 0
+        self.synced_tokens: list[int] | None = None
+        self.live_tokens = [42]
+
+    async def sync(self, prompt_tokens: list[int]) -> None:
+        self.synced_tokens = list(prompt_tokens)
+        self.live_tokens = list(prompt_tokens)
+
+    async def load_payload(self, payload: bytes) -> None:
+        self.loaded_payloads.append(payload)
+        if self.fail_load:
+            raise RuntimeError("payload rejected")
+        self.live_tokens = [99]
+
+    async def save_payload(self) -> bytes:
         self.saved += 1
         return self.payload
 
@@ -410,6 +440,74 @@ def test_kv_cache_restore_failure_does_not_prevent_live_sync(
     assert result.error == "payload rejected"
     assert session.loaded_payloads == [b"bad-payload"]
     assert session.synced_tokens == [1, 2]
+
+
+def test_kv_cache_async_restore_and_store_support_awaitable_sessions(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        cache = Ds4DiskKvCache(tmp_path, "model-a", backend="metal")
+        store_session = AsyncPayloadSession(payload=b"async-payload")
+
+        store_result = await cache.astore(
+            store_session,
+            [1, 2],
+            16,
+            rendered_prompt="<rendered>",
+        )
+
+        restore_session = AsyncPayloadSession()
+        restore_result = await cache.arestore(restore_session, [1, 2], 16)
+        metadata = cache.read_metadata(restore_result.entry)
+
+        assert store_result.status == "stored"
+        assert store_result.stored is True
+        assert store_session.saved == 1
+        assert restore_result.status == "hit"
+        assert restore_result.restored is True
+        assert restore_session.loaded_payloads == [b"async-payload"]
+        assert restore_session.synced_tokens is None
+        assert metadata is not None
+        assert metadata.rendered_prompt == "<rendered>"
+        assert metadata.hit_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_kv_cache_async_restore_failure_falls_back_to_awaited_sync(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        cache = Ds4DiskKvCache(tmp_path, "model-a", backend="metal")
+        write_cache_entry(cache, [1, 2], 16, b"bad-payload")
+        session = AsyncPayloadSession(fail_load=True)
+
+        result = await cache.arestore(session, [1, 2], 16)
+
+        assert result.status == "miss"
+        assert result.error == "payload rejected"
+        assert session.loaded_payloads == [b"bad-payload"]
+        assert session.synced_tokens == [1, 2]
+
+    asyncio.run(scenario())
+
+
+def test_kv_cache_sync_helpers_reject_awaitable_sessions(
+    tmp_path: Path,
+) -> None:
+    cache = Ds4DiskKvCache(tmp_path, "model-a", backend="metal")
+    write_cache_entry(cache, [1], 16, b"payload")
+    session = AsyncPayloadSession()
+
+    restore_result = cache.restore(session, [1], 16, sync_on_miss=False)
+    store_result = cache.store(session, [1], 16)
+
+    assert restore_result.status == "miss"
+    assert restore_result.error is not None
+    assert "use arestore() or astore()" in restore_result.error
+    assert store_result.status == "error"
+    assert store_result.error is not None
+    assert "use arestore() or astore()" in store_result.error
 
 
 def test_kv_cache_disk_write_failure_is_non_fatal_by_default(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 from collections.abc import Iterable, Mapping
@@ -155,6 +156,26 @@ def _method(target: object, name: str) -> Any:
     if not callable(method):
         raise TypeError(f"session must provide a callable {name}() method.")
     return method
+
+
+def _call_sync(method: Any, *args: object) -> object:
+    result = method(*args)
+    if inspect.isawaitable(result):
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+        raise TypeError(
+            "session method returned an awaitable; use arestore() or "
+            "astore() with async sessions."
+        )
+    return result
+
+
+async def _call_async(method: Any, *args: object) -> object:
+    result = method(*args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def _error_text(error: BaseException) -> str:
@@ -556,7 +577,7 @@ class Ds4DiskKvCache:
                     raise ValueError(
                         "cache payload size does not match metadata."
                     )
-                _method(session, "load_payload")(payload)
+                _call_sync(_method(session, "load_payload"), payload)
             except Exception as error:
                 miss_error = _error_text(error)
             else:
@@ -578,6 +599,78 @@ class Ds4DiskKvCache:
             miss_error = "cache metadata does not match request."
 
         synced = self._sync_on_miss(session, tokens, sync_on_miss)
+        return Ds4KvCacheRestoreResult(
+            status="miss",
+            entry=entry,
+            metadata=metadata,
+            synced=synced,
+            error=miss_error,
+        )
+
+    async def arestore(
+        self,
+        session: object,
+        prompt_tokens: Iterable[int],
+        ctx_size: int,
+        *,
+        enabled: bool = True,
+        sync_on_miss: bool = True,
+    ) -> Ds4KvCacheRestoreResult:
+        """Async restore variant for sessions with awaitable payload APIs."""
+        _validate_bool("enabled", enabled)
+        _validate_bool("sync_on_miss", sync_on_miss)
+        tokens = _normalize_token_ids(prompt_tokens)
+        ctx = _validate_int("ctx_size", ctx_size, minimum=1, maximum=C_INT_MAX)
+        entry = self._entry_for_tokens(tokens, ctx)
+
+        if not enabled:
+            synced = await self._async_sync_on_miss(
+                session,
+                tokens,
+                sync_on_miss,
+            )
+            return Ds4KvCacheRestoreResult(
+                status="disabled",
+                entry=entry,
+                synced=synced,
+            )
+
+        metadata = self.read_metadata(entry)
+        miss_error: str | None = None
+        if metadata is not None and self.metadata_matches(
+            metadata,
+            tokens,
+            ctx,
+        ):
+            payload_path = self._directory / metadata.payload_file
+            try:
+                payload = payload_path.read_bytes()
+                if len(payload) != metadata.payload_size:
+                    raise ValueError(
+                        "cache payload size does not match metadata."
+                    )
+                await _call_async(_method(session, "load_payload"), payload)
+            except Exception as error:
+                miss_error = _error_text(error)
+            else:
+                restored_metadata = replace(
+                    metadata,
+                    hit_count=metadata.hit_count + 1,
+                    accessed_at=time(),
+                    payload_size=len(payload),
+                )
+                warning = self._try_write_metadata(restored_metadata)
+                return Ds4KvCacheRestoreResult(
+                    status="hit",
+                    entry=entry,
+                    metadata=restored_metadata,
+                    restored=True,
+                    warning=warning,
+                )
+        elif metadata is not None:
+            miss_error = "cache metadata does not match request."
+
+        synced = await self._async_sync_on_miss(session, tokens, sync_on_miss)
         return Ds4KvCacheRestoreResult(
             status="miss",
             entry=entry,
@@ -612,7 +705,76 @@ class Ds4DiskKvCache:
         try:
             payload = _validate_bytes(
                 "save_payload result",
-                _method(session, "save_payload")(),
+                _call_sync(_method(session, "save_payload")),
+            )
+            existing = self.read_metadata(entry)
+            now = time()
+            created_at = now
+            hit_count = 0
+            if existing is not None and self.metadata_matches(
+                existing,
+                tokens,
+                ctx,
+            ):
+                created_at = existing.created_at
+                hit_count = existing.hit_count
+
+            metadata = self.metadata_for(
+                tokens,
+                ctx,
+                rendered_prompt=rendered_prompt,
+                payload_size=len(payload),
+                created_at=created_at,
+                accessed_at=now,
+                hit_count=hit_count,
+            )
+            self._write_payload_and_metadata(entry, metadata, payload)
+            evicted_entries = (
+                self.evict(budget) if budget is not None else ()
+            )
+            return Ds4KvCacheStoreResult(
+                status="stored",
+                entry=entry,
+                metadata=metadata,
+                stored=True,
+                evicted_entries=evicted_entries,
+            )
+        except Exception as error:
+            if raise_on_error:
+                raise
+            return Ds4KvCacheStoreResult(
+                status="error",
+                entry=entry,
+                error=_error_text(error),
+            )
+
+    async def astore(
+        self,
+        session: object,
+        prompt_tokens: Iterable[int],
+        ctx_size: int,
+        *,
+        rendered_prompt: str | None = None,
+        enabled: bool = True,
+        size_budget_bytes: int | None = None,
+        raise_on_error: bool = False,
+    ) -> Ds4KvCacheStoreResult:
+        """Async store variant for sessions with awaitable payload APIs."""
+        _validate_optional_str("rendered_prompt", rendered_prompt)
+        _validate_bool("enabled", enabled)
+        budget = _validate_optional_size_budget(size_budget_bytes)
+        _validate_bool("raise_on_error", raise_on_error)
+        tokens = _normalize_token_ids(prompt_tokens)
+        ctx = _validate_int("ctx_size", ctx_size, minimum=1, maximum=C_INT_MAX)
+        entry = self._entry_for_tokens(tokens, ctx)
+
+        if not enabled:
+            return Ds4KvCacheStoreResult(status="disabled", entry=entry)
+
+        try:
+            payload = _validate_bytes(
+                "save_payload result",
+                await _call_async(_method(session, "save_payload")),
             )
             existing = self.read_metadata(entry)
             now = time()
@@ -731,7 +893,18 @@ class Ds4DiskKvCache:
     ) -> bool:
         if not enabled:
             return False
-        _method(session, "sync")(list(prompt_tokens))
+        _call_sync(_method(session, "sync"), list(prompt_tokens))
+        return True
+
+    async def _async_sync_on_miss(
+        self,
+        session: object,
+        prompt_tokens: tuple[int, ...],
+        enabled: bool,
+    ) -> bool:
+        if not enabled:
+            return False
+        await _call_async(_method(session, "sync"), list(prompt_tokens))
         return True
 
     def _try_write_metadata(
