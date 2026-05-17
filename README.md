@@ -328,6 +328,10 @@ python examples/generate_text_async.py \
   steering options, and native startup log replay.
 - `pyds4.SamplingOptions` configures temperature, top-k, top-p, min-p, and
   seed-based sampling.
+- `pyds4.GenerationOptions`, `pyds4.GenerationScoreOptions`, and
+  `pyds4.TokenScoreMode` describe framework-neutral generation limits, stop
+  strings, EOS handling, decoding, and optional token score details. They do
+  not depend on Avalan response or tool objects.
 - `Session.eval_speculative_argmax()` and
   `AsyncSession.eval_speculative_argmax()` expose DS4's greedy MTP speculative
   step when the engine was opened with an MTP model and draft depth greater

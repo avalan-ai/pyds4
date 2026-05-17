@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -82,6 +83,19 @@ def test_public_type_defaults_and_enum_coercion() -> None:
     assert score.token_id == 5
     assert score.logprob == -0.25
 
+    score_options = pyds4.GenerationScoreOptions()
+    assert score_options.mode is pyds4.TokenScoreMode.NONE
+    assert score_options.top_k == 0
+
+    generation = pyds4.GenerationOptions()
+    assert generation.max_new_tokens == 1
+    assert generation.sampling is None
+    assert generation.stop_strings == ()
+    assert generation.stop_on_eos is True
+    assert generation.decode is False
+    assert generation.scores == pyds4.GenerationScoreOptions()
+    assert generation.advance is True
+
 
 def test_public_types_are_frozen_and_slotted() -> None:
     options = pyds4.EngineOptions(model_path="model.gguf")
@@ -111,6 +125,8 @@ def test_public_types_are_frozen_and_slotted() -> None:
         total=2,
     )
     score = pyds4.TokenScore(token_id=5, logprob=-0.25)
+    score_options = pyds4.GenerationScoreOptions()
+    generation = pyds4.GenerationOptions(stop_strings=["stop"])
 
     with pytest.raises(FrozenInstanceError):
         options.model_path = "other.gguf"  # type: ignore[misc]
@@ -141,6 +157,18 @@ def test_public_types_are_frozen_and_slotted() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         score.extra = True  # type: ignore[attr-defined]
+
+    with pytest.raises(FrozenInstanceError):
+        score_options.mode = pyds4.TokenScoreMode.TOKEN_LOGPROB  # type: ignore[misc]
+
+    with pytest.raises((AttributeError, TypeError)):
+        score_options.extra = True  # type: ignore[attr-defined]
+
+    with pytest.raises(FrozenInstanceError):
+        generation.max_new_tokens = 2  # type: ignore[misc]
+
+    with pytest.raises((AttributeError, TypeError)):
+        generation.extra = True  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -188,6 +216,182 @@ def test_token_score_rejects_invalid_values(
 ) -> None:
     with pytest.raises((TypeError, ValueError), match=error_match):
         pyds4.TokenScore(**kwargs)  # type: ignore[arg-type]
+
+
+def test_generation_score_options_support_public_request_shapes() -> None:
+    none = pyds4.GenerationScoreOptions()
+    chosen = pyds4.GenerationScoreOptions(
+        mode=pyds4.TokenScoreMode.TOKEN_LOGPROB,
+    )
+    top = pyds4.GenerationScoreOptions(
+        mode="top_logprobs",
+        top_k=3,
+    )
+    combined = pyds4.GenerationScoreOptions(
+        mode=pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+        top_k=5,
+    )
+
+    assert none.mode is pyds4.TokenScoreMode.NONE
+    assert none.top_k == 0
+    assert chosen.mode is pyds4.TokenScoreMode.TOKEN_LOGPROB
+    assert chosen.top_k == 0
+    assert top.mode is pyds4.TokenScoreMode.TOP_LOGPROBS
+    assert top.top_k == 3
+    assert combined.mode is (
+        pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS
+    )
+    assert combined.top_k == 5
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"mode": "unsupported"}, "Unsupported token score mode"),
+        ({"mode": pyds4.TokenScoreMode.TOP_LOGPROBS}, "top_k"),
+        (
+            {
+                "mode": pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+            },
+            "top_k",
+        ),
+        ({"mode": pyds4.TokenScoreMode.NONE, "top_k": 1}, "top_k"),
+        ({"mode": pyds4.TokenScoreMode.TOKEN_LOGPROB, "top_k": 1}, "top_k"),
+        ({"top_k": -1}, "top_k"),
+        ({"top_k": True}, "top_k"),
+    ],
+)
+def test_generation_score_options_reject_invalid_requests(
+    kwargs: dict[str, object],
+    error_match: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=error_match):
+        pyds4.GenerationScoreOptions(**kwargs)  # type: ignore[arg-type]
+
+
+def test_generation_options_accept_stop_string_shapes() -> None:
+    assert pyds4.GenerationOptions(
+        stop_strings="</s>",
+    ).stop_strings == ("</s>",)
+    assert pyds4.GenerationOptions(
+        stop_strings=("stop", "done"),
+    ).stop_strings == ("stop", "done")
+
+    source = ["stop"]
+    options = pyds4.GenerationOptions(stop_strings=source)
+    source.append("mutated")
+
+    assert options.stop_strings == ("stop",)
+
+
+def test_generation_options_accept_sampling_and_score_options() -> None:
+    sampling = pyds4.SamplingOptions(temperature=0.7, seed=7)
+    scores = pyds4.GenerationScoreOptions(
+        mode=pyds4.TokenScoreMode.TOP_LOGPROBS,
+        top_k=2,
+    )
+
+    options = pyds4.GenerationOptions(
+        max_new_tokens=12,
+        sampling=sampling,
+        stop_strings=["stop"],
+        stop_on_eos=False,
+        decode=True,
+        scores=scores,
+        advance=False,
+    )
+
+    assert options.max_new_tokens == 12
+    assert options.sampling == sampling
+    assert options.stop_strings == ("stop",)
+    assert options.stop_on_eos is False
+    assert options.decode is True
+    assert options.scores == scores
+    assert options.advance is False
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"max_new_tokens": -1}, "max_new_tokens"),
+        ({"max_new_tokens": True}, "max_new_tokens"),
+        ({"max_new_tokens": 2**31}, "max_new_tokens"),
+        ({"sampling": object()}, "sampling"),
+        ({"stop_strings": ""}, "stop_strings"),
+        ({"stop_strings": [""]}, "stop_strings"),
+        ({"stop_strings": [1]}, "stop_strings"),
+        ({"stop_strings": {">"}}, "stop_strings"),
+        ({"stop_on_eos": 1}, "stop_on_eos"),
+        ({"decode": 1}, "decode"),
+        ({"scores": object()}, "scores"),
+        ({"advance": 1}, "advance"),
+    ],
+)
+def test_generation_options_reject_invalid_values(
+    kwargs: dict[str, object],
+    error_match: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=error_match):
+        pyds4.GenerationOptions(**kwargs)  # type: ignore[arg-type]
+
+
+def test_generation_step_carries_decoded_text_and_scores() -> None:
+    score = pyds4.TokenScore(token_id=7, logprob=-0.5)
+    step = pyds4.GenerationStep(
+        token_id=7,
+        is_eos=False,
+        advanced=True,
+        token_bytes=b"x",
+        decoded_text="x",
+        token_logprob=-0.5,
+        top_logprobs=[score],  # type: ignore[arg-type]
+    )
+
+    assert step.token_id == 7
+    assert step.token_bytes == b"x"
+    assert step.decoded_text == "x"
+    assert step.token_logprob == -0.5
+    assert step.top_logprobs == (score,)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"token_id": True}, "token_id"),
+        ({"token_id": -1}, "token_id"),
+        ({"is_eos": 1}, "is_eos"),
+        ({"advanced": 1}, "advanced"),
+        ({"token_bytes": "x"}, "token_bytes"),
+        ({"decoded_text": b"x"}, "decoded_text"),
+        ({"token_logprob": math.inf}, "token_logprob"),
+        ({"top_logprobs": [object()]}, "top_logprobs"),
+    ],
+)
+def test_generation_step_rejects_invalid_values(
+    kwargs: dict[str, object],
+    error_match: str,
+) -> None:
+    values: dict[str, object] = {
+        "token_id": 1,
+        "is_eos": False,
+        "advanced": True,
+    }
+    values.update(kwargs)
+    with pytest.raises((TypeError, ValueError), match=error_match):
+        pyds4.GenerationStep(**values)  # type: ignore[arg-type]
+
+
+def test_generation_option_construction_does_not_import_avalan() -> None:
+    sys.modules.pop("avalan", None)
+
+    pyds4.GenerationOptions(
+        stop_strings="stop",
+        scores=pyds4.GenerationScoreOptions(
+            mode=pyds4.TokenScoreMode.TOKEN_LOGPROB,
+        ),
+    )
+
+    assert "avalan" not in sys.modules
 
 
 @pytest.mark.parametrize(

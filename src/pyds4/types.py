@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from math import isfinite
 from numbers import Real
@@ -23,6 +23,15 @@ class ThinkMode(StrEnum):
     NONE = "none"
     HIGH = "high"
     MAX = "max"
+
+
+class TokenScoreMode(StrEnum):
+    """Name the token score detail requested during generation."""
+
+    NONE = "none"
+    TOKEN_LOGPROB = "token_logprob"
+    TOP_LOGPROBS = "top_logprobs"
+    TOKEN_LOGPROB_AND_TOP_LOGPROBS = "token_logprob_and_top_logprobs"
 
 
 def _validate_int(
@@ -49,6 +58,13 @@ def _validate_optional_str(name: str, value: str | None) -> None:
     if value is None:
         return
     _validate_str(name, value)
+
+
+def _validate_optional_bytes(name: str, value: bytes | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, bytes):
+        raise TypeError(f"{name} must be bytes or None.")
 
 
 def _validate_bool(name: str, value: bool) -> None:
@@ -92,6 +108,47 @@ def _validate_real(
         raise ValueError(f"{name} must be >= {minimum:g}.")
     if maximum is not None and value > maximum:
         raise ValueError(f"{name} must be <= {maximum:g}.")
+
+
+def _validate_optional_real(name: str, value: float | None) -> None:
+    if value is None:
+        return
+    _validate_real(name, value)
+
+
+def _validate_stop_strings(
+    value: str | list[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    result: tuple[str, ...]
+    if isinstance(value, str):
+        result = (value,)
+    elif isinstance(value, (list, tuple)):
+        result = tuple(value)
+    else:
+        raise TypeError(
+            "stop_strings must be a string, list, or tuple of strings."
+        )
+
+    for item in result:
+        _validate_str("stop_strings item", item)
+        if not item:
+            raise ValueError("stop_strings items must not be empty.")
+    return result
+
+
+def _validate_token_score_tuple(
+    name: str,
+    value: Iterable["TokenScore"],
+) -> tuple["TokenScore", ...]:
+    if isinstance(value, (bytes, str)) or not isinstance(value, Iterable):
+        raise TypeError(f"{name} must be an iterable of TokenScore objects.")
+    result = tuple(value)
+    for item in result:
+        if not isinstance(item, TokenScore):
+            raise TypeError(
+                f"{name} items must be TokenScore objects."
+            )
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +278,79 @@ class TokenScore:
 
 
 @dataclass(frozen=True, slots=True)
+class GenerationScoreOptions:
+    """Configure optional token score details for generation steps."""
+
+    mode: TokenScoreMode = TokenScoreMode.NONE
+    top_k: int = 0
+
+    def __post_init__(self) -> None:
+        try:
+            mode = TokenScoreMode(self.mode)
+        except ValueError as error:
+            raise ValueError(
+                f"Unsupported token score mode {self.mode!r}."
+            ) from error
+        object.__setattr__(self, "mode", mode)
+        _validate_int("top_k", self.top_k, minimum=0, maximum=C_INT_MAX)
+
+        requests_top_logprobs = mode in {
+            TokenScoreMode.TOP_LOGPROBS,
+            TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+        }
+        if requests_top_logprobs and self.top_k == 0:
+            raise ValueError(
+                "top_k must be positive when top logprobs are requested."
+            )
+        if not requests_top_logprobs and self.top_k != 0:
+            raise ValueError(
+                "top_k must be 0 unless top logprobs are requested."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationOptions:
+    """Configure framework-neutral DS4 token generation behavior."""
+
+    max_new_tokens: int = 1
+    sampling: SamplingOptions | None = None
+    stop_strings: str | list[str] | tuple[str, ...] = ()
+    stop_on_eos: bool = True
+    decode: bool = False
+    scores: GenerationScoreOptions = field(
+        default_factory=GenerationScoreOptions
+    )
+    advance: bool = True
+
+    def __post_init__(self) -> None:
+        _validate_int(
+            "max_new_tokens",
+            self.max_new_tokens,
+            minimum=0,
+            maximum=C_INT_MAX,
+        )
+        if self.sampling is not None and not isinstance(
+            self.sampling,
+            SamplingOptions,
+        ):
+            raise TypeError(
+                "sampling must be a SamplingOptions instance or None."
+            )
+        object.__setattr__(
+            self,
+            "stop_strings",
+            _validate_stop_strings(self.stop_strings),
+        )
+        _validate_bool("stop_on_eos", self.stop_on_eos)
+        _validate_bool("decode", self.decode)
+        if not isinstance(self.scores, GenerationScoreOptions):
+            raise TypeError(
+                "scores must be a GenerationScoreOptions instance."
+            )
+        _validate_bool("advance", self.advance)
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationStep:
     """Describe one candidate token selected by an async generation helper."""
 
@@ -228,6 +358,27 @@ class GenerationStep:
     is_eos: bool
     advanced: bool
     token_bytes: bytes | None = None
+    decoded_text: str | None = None
+    token_logprob: float | None = None
+    top_logprobs: tuple[TokenScore, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_int(
+            "token_id",
+            self.token_id,
+            minimum=0,
+            maximum=C_INT_MAX,
+        )
+        _validate_bool("is_eos", self.is_eos)
+        _validate_bool("advanced", self.advanced)
+        _validate_optional_bytes("token_bytes", self.token_bytes)
+        _validate_optional_str("decoded_text", self.decoded_text)
+        _validate_optional_real("token_logprob", self.token_logprob)
+        object.__setattr__(
+            self,
+            "top_logprobs",
+            _validate_token_score_tuple("top_logprobs", self.top_logprobs),
+        )
 
 
 @dataclass(frozen=True, slots=True)

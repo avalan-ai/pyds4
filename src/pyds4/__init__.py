@@ -36,11 +36,14 @@ from .types import (
     Backend,
     Ds4Capabilities,
     EngineOptions,
+    GenerationOptions,
+    GenerationScoreOptions,
     GenerationStep,
     ProgressEvent,
     SamplingOptions,
     ThinkMode,
     TokenScore,
+    TokenScoreMode,
 )
 
 _configure_metal_source_paths()
@@ -63,6 +66,8 @@ __all__ = [
     "Ds4LoadError",
     "Engine",
     "EngineOptions",
+    "GenerationOptions",
+    "GenerationScoreOptions",
     "GenerationStep",
     "ProgressEvent",
     "REQUIRED_C_SYMBOLS",
@@ -70,6 +75,7 @@ __all__ = [
     "Session",
     "ThinkMode",
     "TokenScore",
+    "TokenScoreMode",
     "__ds4_api_version__",
     "__ds4_available_backends__",
     "__ds4_commit__",
