@@ -449,6 +449,8 @@ The `cuda_arch` workflow input controls the NVIDIA architecture passed to
 CMake.
 
 The CUDA wheel is audited in the release workflow but keeps CUDA runtime and
-cuBLAS libraries external, so it is published as a `linux_x86_64` wheel. A
-strict `auditwheel repair` currently bundles those NVIDIA libraries and
-creates an artifact too large for PyPI's default file limit.
+cuBLAS libraries external, so it is built as a `linux_x86_64` wheel. PyPI
+rejects that platform tag, so CUDA wheels are attached to the GitHub release;
+PyPI receives the sdist and macOS wheels. A strict `auditwheel repair`
+currently bundles those NVIDIA libraries and creates an artifact too large for
+PyPI's default file limit.
