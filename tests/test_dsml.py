@@ -362,6 +362,27 @@ def test_parse_generated_dsml_accepts_ds4_marker_variants(
     assert parsed.calls[0].arguments == arguments
 
 
+def test_parse_generated_dsml_accepts_xml_attribute_quote_variants() -> None:
+    text = (
+        "<tool_calls>"
+        "<invoke name = 'math.calculator' id = 'call_1'>"
+        "<parameter name = 'expression' string = 'true'>2 + 2</parameter>"
+        '<parameter name="precision" string = \'false\'>2</parameter>'
+        "</invoke>"
+        "</tool_calls>"
+    )
+
+    parsed = parse_generated_message(text)
+
+    assert parsed.status is DsmlParseStatus.COMPLETE
+    assert parsed.calls[0].id == "call_1"
+    assert parsed.calls[0].name == "math.calculator"
+    assert parsed.calls[0].arguments == {
+        "expression": "2 + 2",
+        "precision": 2,
+    }
+
+
 def test_parse_generated_dsml_extracts_multiple_invokes_in_order() -> None:
     text = (
         "<tool_calls>"
@@ -590,6 +611,15 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "<｜DSML｜invoke>\n"
                 "</｜DSML｜invoke>\n"
                 "</｜DSML｜tool_calls>"
+            ),
+            "missing a name",
+        ),
+        (
+            (
+                "<tool_calls>"
+                "<invoke name=math.calculator>"
+                "</invoke>"
+                "</tool_calls>"
             ),
             "missing a name",
         ),

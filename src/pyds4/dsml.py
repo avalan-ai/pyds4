@@ -47,7 +47,9 @@ PARAMETER_END_MARKERS = (
     "</DSML｜parameter>",
     "</parameter>",
 )
-_ATTR_RE = re.compile(r'([A-Za-z_][\w:-]*)="([^"]*)"')
+_ATTR_RE = re.compile(
+    r"""([A-Za-z_][\w:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')"""
+)
 _INVOKE_START_RE = re.compile(
     r"<(?:｜DSML｜|DSML｜)?invoke\b([^>]*)>",
     re.DOTALL,
@@ -853,7 +855,8 @@ def _parameter_end_after(text: str, index: int) -> int:
 
 def _parse_attrs(text: str) -> dict[str, str]:
     return {
-        name: html.unescape(value) for name, value in _ATTR_RE.findall(text)
+        name: html.unescape(double_quoted or single_quoted)
+        for name, double_quoted, single_quoted in _ATTR_RE.findall(text)
     }
 
 
