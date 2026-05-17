@@ -66,7 +66,7 @@ must provide compatible NVIDIA CUDA 12 runtime libraries on the target host.
 1. Update the version:
 
    ```sh
-   make version VERSION=1.0.2
+   make version VERSION=1.1.0
    ```
 
 2. Run the tests you need for the change, commit the version bump, and merge it

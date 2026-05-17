@@ -432,7 +432,7 @@ make wheel-smoke
 `pyproject.toml` is the version source. For a new release, bump it and commit:
 
 ```sh
-make version VERSION=1.0.2
+make version VERSION=1.1.0
 ```
 
 Build and publish one backend wheel plus the sdist:
