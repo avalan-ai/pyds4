@@ -14,6 +14,7 @@ from pyds4.dsml import (
     DsmlParseStatus,
     DsmlPrompt,
     DsmlToolCall,
+    DsmlToolCallBufferStatus,
     DsmlToolSchema,
     normalize_tool_schemas,
     parse_generated_message,
@@ -23,6 +24,7 @@ from pyds4.dsml import (
     render_tool_result,
     split_reasoning,
     stream_argument_deltas,
+    tool_call_buffer_status,
     tool_call_start_span,
     tool_call_start_suffix_length,
     tool_schema_text,
@@ -448,6 +450,38 @@ def test_tool_call_start_suffix_length_tracks_possible_markers(
 def test_tool_call_start_suffix_length_rejects_non_string() -> None:
     with pytest.raises(TypeError, match="text must be a string"):
         tool_call_start_suffix_length(object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("plain text", DsmlToolCallBufferStatus.NONE),
+        ("<｜DSM", DsmlToolCallBufferStatus.PREFIX),
+        ("visible\n\n<｜DSML｜tool_calls", DsmlToolCallBufferStatus.PREFIX),
+        ("<｜DSML｜tool_calls>", DsmlToolCallBufferStatus.OPEN),
+        (
+            "<｜DSML｜tool_calls></｜DSML｜tool_calls>",
+            DsmlToolCallBufferStatus.CLOSED,
+        ),
+        ("<DSML｜tool_calls>", DsmlToolCallBufferStatus.OPEN),
+        (
+            "<DSML｜tool_calls></DSML｜tool_calls>",
+            DsmlToolCallBufferStatus.CLOSED,
+        ),
+        ("<tool_calls>", DsmlToolCallBufferStatus.OPEN),
+        ("<tool_calls></tool_calls>", DsmlToolCallBufferStatus.CLOSED),
+    ],
+)
+def test_tool_call_buffer_status_tracks_dsml_marker_variants(
+    text: str,
+    expected: DsmlToolCallBufferStatus,
+) -> None:
+    assert tool_call_buffer_status(text) is expected
+
+
+def test_tool_call_buffer_status_rejects_non_string() -> None:
+    with pytest.raises(TypeError, match="text must be a string"):
+        tool_call_buffer_status(object())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

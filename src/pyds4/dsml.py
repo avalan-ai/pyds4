@@ -92,6 +92,15 @@ class DsmlParseStatus(StrEnum):
     MALFORMED = "malformed"
 
 
+class DsmlToolCallBufferStatus(StrEnum):
+    """Name the status of a growing generated DSML tool-call buffer."""
+
+    NONE = "none"
+    PREFIX = "prefix"
+    OPEN = "open"
+    CLOSED = "closed"
+
+
 def _validate_str(name: str, value: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string.")
@@ -636,6 +645,23 @@ def tool_call_start_suffix_length(text: str) -> int:
     return 0
 
 
+def tool_call_buffer_status(text: str) -> DsmlToolCallBufferStatus:
+    """Classify a growing generated text buffer relative to DSML tool calls."""
+    _validate_str("text", text)
+    start_match: re.Match[str] | None = None
+    for match in _TOOL_CALLS_START_RE.finditer(text):
+        start_match = match
+
+    if start_match is not None:
+        if _TOOL_CALLS_END_RE.search(text[start_match.end() :]):
+            return DsmlToolCallBufferStatus.CLOSED
+        return DsmlToolCallBufferStatus.OPEN
+
+    if tool_call_start_suffix_length(text):
+        return DsmlToolCallBufferStatus.PREFIX
+    return DsmlToolCallBufferStatus.NONE
+
+
 def stream_argument_deltas(
     raw_dsml: str,
     emitted_until: int,
@@ -881,6 +907,7 @@ __all__ = [
     "DsmlParseResult",
     "DsmlParseStatus",
     "DsmlPrompt",
+    "DsmlToolCallBufferStatus",
     "DsmlToolCall",
     "DsmlToolSchema",
     "JsonObject",
@@ -901,6 +928,7 @@ __all__ = [
     "render_tool_result",
     "split_reasoning",
     "stream_argument_deltas",
+    "tool_call_buffer_status",
     "tool_call_start_span",
     "tool_schema_text",
     "tools_prompt",
