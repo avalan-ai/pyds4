@@ -381,6 +381,32 @@ def test_generation_step_rejects_invalid_values(
         pyds4.GenerationStep(**values)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"event": b"prefill_chunk"}, "event"),
+        ({"current": True}, "current"),
+        ({"current": -1}, "current"),
+        ({"current": 2**31}, "current"),
+        ({"total": False}, "total"),
+        ({"total": -1}, "total"),
+        ({"total": 2**31}, "total"),
+    ],
+)
+def test_progress_event_rejects_invalid_values(
+    kwargs: dict[str, object],
+    error_match: str,
+) -> None:
+    values: dict[str, object] = {
+        "event": "prefill_chunk",
+        "current": 1,
+        "total": 2,
+    }
+    values.update(kwargs)
+    with pytest.raises((TypeError, ValueError), match=error_match):
+        pyds4.ProgressEvent(**values)  # type: ignore[arg-type]
+
+
 def test_generation_option_construction_does_not_import_avalan() -> None:
     sys.modules.pop("avalan", None)
 

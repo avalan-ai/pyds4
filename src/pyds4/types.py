@@ -386,3 +386,18 @@ class ProgressEvent:
     event: str
     current: int
     total: int
+
+    def __post_init__(self) -> None:
+        _validate_str("event", self.event)
+        _validate_int(
+            "current",
+            self.current,
+            minimum=0,
+            maximum=C_INT_MAX,
+        )
+        _validate_int(
+            "total",
+            self.total,
+            minimum=0,
+            maximum=C_INT_MAX,
+        )
