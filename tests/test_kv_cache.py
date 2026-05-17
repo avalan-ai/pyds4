@@ -413,6 +413,43 @@ def test_kv_cache_budget_eviction_removes_least_useful_entries(
     assert result.entry.payload_path.exists()
 
 
+def test_kv_cache_eviction_skips_mismatched_metadata_file_names(
+    tmp_path: Path,
+) -> None:
+    cache = Ds4DiskKvCache(tmp_path, "model-a", backend="metal")
+    metadata = cache.metadata_for(
+        [1],
+        16,
+        payload_size=5,
+        created_at=1.0,
+        accessed_at=1.0,
+    )
+
+    mismatched_payload_path = tmp_path / "other.payload"
+    mismatched_payload_path.write_bytes(b"other")
+    mismatched_payload_metadata = replace(
+        metadata,
+        payload_file=mismatched_payload_path.name,
+    )
+    cache.write_metadata(mismatched_payload_metadata)
+
+    orphan_payload_path = tmp_path / metadata.payload_file
+    orphan_payload_path.write_bytes(b"orphan")
+    orphan_metadata_path = tmp_path / "orphan.json"
+    orphan_metadata_path.write_text(
+        json.dumps(metadata.to_json_dict(), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    evicted = cache.evict(0)
+
+    assert evicted == ()
+    assert mismatched_payload_path.exists()
+    assert orphan_payload_path.exists()
+    assert (tmp_path / f"{metadata.key}.json").exists()
+    assert orphan_metadata_path.exists()
+
+
 def test_kv_cache_disabled_restore_and_store_leave_no_files(
     tmp_path: Path,
 ) -> None:

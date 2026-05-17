@@ -245,6 +245,9 @@ async def run_tool_prompt(engine: pyds4.AsyncEngine) -> None:
 When continuing after a tool result, render the next prompt with the prior
 assistant tool call and a `DsmlMessage(role="tool", content=...)` result so
 the DSML transcript stays aligned with DS4's native prompt format.
+String parameter rendering escapes every accepted DSML parameter close-marker
+variant before it reaches the generated block, while preserving literal entity
+text such as `&lt;/parameter>` and `&amp;lt;/parameter>` when parsed back.
 
 ## Advanced APIs
 

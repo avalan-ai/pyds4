@@ -842,6 +842,11 @@ class Ds4DiskKvCache:
                 metadata
             ):
                 continue
+            if not self._metadata_file_names_match_key(
+                metadata,
+                metadata_path,
+            ):
+                continue
             payload_path = self._directory / metadata.payload_file
             try:
                 payload_size = payload_path.stat().st_size
@@ -891,6 +896,16 @@ class Ds4DiskKvCache:
             and metadata.pyds4_version == self._pyds4_version
             and metadata.ds4_commit == self._ds4_commit
             and metadata.backend == self._backend
+        )
+
+    @staticmethod
+    def _metadata_file_names_match_key(
+        metadata: Ds4KvCacheMetadata,
+        metadata_path: Path,
+    ) -> bool:
+        return (
+            metadata_path.name == f"{metadata.key}.json"
+            and metadata.payload_file == f"{metadata.key}.payload"
         )
 
     def _sync_on_miss(

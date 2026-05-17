@@ -74,6 +74,14 @@ _TOOL_CALLS_START_RE = re.compile(
 _TOOL_CALLS_END_RE = re.compile(
     r"</(?:(?:｜DSML｜|DSML｜)tool_calls|tool_calls)>",
 )
+_PARAMETER_END_ENTITY_RE = re.compile(
+    r"&(?:amp;)*lt;(?:"
+    + "|".join(
+        re.escape(marker[1:])
+        for marker in sorted(PARAMETER_END_MARKERS, key=len, reverse=True)
+    )
+    + r")"
+)
 
 
 class DsmlMessageRole(StrEnum):
@@ -957,11 +965,10 @@ def _escape_text(value: str) -> str:
 
 
 def _escape_parameter_text(value: str) -> str:
-    for marker in PARAMETER_END_MARKERS:
-        value = value.replace(
-            _escaped_parameter_end_marker(marker),
-            _protected_escaped_parameter_end_marker(marker),
-        )
+    value = _PARAMETER_END_ENTITY_RE.sub(
+        lambda match: f"&amp;{match.group(0)[1:]}",
+        value,
+    )
     for marker in PARAMETER_END_MARKERS:
         value = value.replace(marker, _escaped_parameter_end_marker(marker))
     return value
@@ -977,22 +984,21 @@ def _escape_json_literal(value: str) -> str:
 
 
 def _unescape_parameter_text(value: str) -> str:
-    for marker in PARAMETER_END_MARKERS:
-        value = value.replace(_escaped_parameter_end_marker(marker), marker)
-    for marker in PARAMETER_END_MARKERS:
-        value = value.replace(
-            _protected_escaped_parameter_end_marker(marker),
-            _escaped_parameter_end_marker(marker),
-        )
-    return value
+    return _PARAMETER_END_ENTITY_RE.sub(
+        _unescape_parameter_end_entity,
+        value,
+    )
+
+
+def _unescape_parameter_end_entity(match: re.Match[str]) -> str:
+    value = match.group(0)
+    if value.startswith("&amp;"):
+        return f"&{value[len('&amp;') :]}"
+    return f"<{value[len('&lt;') :]}"
 
 
 def _escaped_parameter_end_marker(marker: str) -> str:
     return f"&lt;{marker[1:]}"
-
-
-def _protected_escaped_parameter_end_marker(marker: str) -> str:
-    return f"&amp;lt;{marker[1:]}"
 
 
 __all__ = [
