@@ -362,6 +362,35 @@ def test_parse_generated_dsml_accepts_ds4_marker_variants(
     assert parsed.calls[0].arguments == arguments
 
 
+def test_parse_generated_dsml_extracts_multiple_invokes_in_order() -> None:
+    text = (
+        "<tool_calls>"
+        '<invoke name="math.calculator">'
+        '<parameter name="expression" string="true">'
+        "first call has a long enough body to catch cursor overshoot"
+        "</parameter>"
+        "</invoke>"
+        '<invoke name="math.sqrt">'
+        '<parameter name="value" string="false">16</parameter>'
+        "</invoke>"
+        "</tool_calls>"
+    )
+
+    parsed = parse_generated_message(text)
+
+    assert parsed.status is DsmlParseStatus.COMPLETE
+    assert [call.name for call in parsed.calls] == [
+        "math.calculator",
+        "math.sqrt",
+    ]
+    assert parsed.calls[0].arguments == {
+        "expression": (
+            "first call has a long enough body to catch cursor overshoot"
+        )
+    }
+    assert parsed.calls[1].arguments == {"value": 16}
+
+
 def test_parse_generated_dsml_without_tool_calls_returns_content() -> None:
     parsed = parse_generated_message("<think>hidden</think>visible")
 
@@ -573,6 +602,21 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "</｜DSML｜tool_calls>"
             ),
             "parameter tag is missing a name",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="expression" string="true">'
+                "first call has a long enough body to catch cursor overshoot"
+                "</parameter>"
+                "</invoke>"
+                '<invoke name="broken">'
+                '<parameter name="value">missing close'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "parameter tag is missing a close tag",
         ),
     ],
 )

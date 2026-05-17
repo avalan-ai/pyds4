@@ -776,7 +776,7 @@ def _parse_calls(block: str) -> tuple[tuple[DsmlToolCall, ...], str | None]:
         if not invoke_end:
             return (), f"invoke tag for {name!r} is missing a close tag"
 
-        body_end = match.end() + invoke_end.start()
+        body_end = invoke_end.start()
         body = block[match.end() : body_end]
         arguments, error = _parse_parameters(body)
         if error is not None:
@@ -792,7 +792,7 @@ def _parse_calls(block: str) -> tuple[tuple[DsmlToolCall, ...], str | None]:
             )
         except (TypeError, ValueError) as error:
             return (), str(error)
-        position = body_end + invoke_end.end()
+        position = invoke_end.end()
 
 
 def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
