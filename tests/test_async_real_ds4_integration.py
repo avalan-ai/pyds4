@@ -91,6 +91,18 @@ def test_async_real_ds4_generation_smoke() -> None:
                 expected_pos += int(sampled.advanced)
                 assert await session.pos == expected_pos
 
+            async with await engine.create_session(ctx_size) as session:
+                await session.sync(multi_turn)
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(
+                        pyds4.GenerationOptions(max_new_tokens=8)
+                    )
+                ]
+                assert chunks
+                assert "".join(chunks).strip()
+                assert await session.pos > len(multi_turn)
+
             generated_bytes = [
                 chunk
                 for chunk in (greedy.token_bytes, sampled.token_bytes)

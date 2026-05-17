@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from queue import Queue
 from threading import Event, Thread
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
-from .errors import Ds4Cancelled, Ds4ContextError, Ds4LoadError
+from .errors import (
+    Ds4Cancelled,
+    Ds4ContextError,
+    Ds4GenerationError,
+    Ds4LoadError,
+)
 from .native import Engine as _SyncEngine
 from .native import Session as _SyncSession
 from .types import (
     EngineOptions,
+    GenerationOptions,
     GenerationStep,
     ProgressEvent,
     SamplingOptions,
@@ -42,6 +49,39 @@ def _set_future_exception(
 def _validate_bool_option(name: str, value: bool) -> None:
     if not isinstance(value, bool):
         raise TypeError(f"{name} must be a boolean.")
+
+
+def _validate_generation_options(
+    options: GenerationOptions | None,
+) -> GenerationOptions:
+    if options is None:
+        return GenerationOptions()
+    if not isinstance(options, GenerationOptions):
+        raise TypeError(
+            "options must be a GenerationOptions instance or None."
+        )
+    return options
+
+
+def _find_stop_index(
+    text: str,
+    stop_strings: tuple[str, ...],
+) -> int | None:
+    stop_index: int | None = None
+    for stop_string in stop_strings:
+        index = text.find(stop_string)
+        if index >= 0 and (stop_index is None or index < stop_index):
+            stop_index = index
+    return stop_index
+
+
+def _context_error_from_generation_error(
+    error: Ds4GenerationError,
+) -> Ds4ContextError | None:
+    message = str(error)
+    if "prompt exceeds context" in message.lower():
+        return Ds4ContextError(message)
+    return None
 
 
 @dataclass(slots=True)
@@ -545,6 +585,71 @@ class AsyncSession:
             )
         finally:
             self._drain_progress_events_to_queue()
+
+    def stream_text(
+        self,
+        options: GenerationOptions | None = None,
+    ) -> AsyncIterator[str]:
+        generation_options = _validate_generation_options(options)
+        return self._stream_text(generation_options)
+
+    async def _stream_text(
+        self,
+        generation_options: GenerationOptions,
+    ) -> AsyncIterator[str]:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending_text = ""
+        stop_strings = cast(tuple[str, ...], generation_options.stop_strings)
+        stop_buffer_chars = max(
+            (len(stop_string) for stop_string in stop_strings),
+            default=0,
+        ) - 1
+
+        for _ in range(generation_options.max_new_tokens):
+            try:
+                step = await self.next_token(
+                    generation_options.sampling,
+                    advance=generation_options.advance,
+                    decode=True,
+                    stop_on_eos=generation_options.stop_on_eos,
+                )
+            except Ds4GenerationError as error:
+                context_error = _context_error_from_generation_error(error)
+                if context_error is not None:
+                    raise context_error from error
+                raise
+
+            if step.is_eos:
+                break
+            if step.token_bytes:
+                pending_text += decoder.decode(
+                    step.token_bytes,
+                    final=False,
+                )
+
+            stop_index = _find_stop_index(pending_text, stop_strings)
+            if stop_index is not None:
+                chunk = pending_text[:stop_index]
+                if chunk:
+                    yield chunk
+                return
+
+            if stop_buffer_chars <= 0:
+                if pending_text:
+                    yield pending_text
+                    pending_text = ""
+            elif len(pending_text) > stop_buffer_chars:
+                chunk = pending_text[:-stop_buffer_chars]
+                pending_text = pending_text[-stop_buffer_chars:]
+                if chunk:
+                    yield chunk
+
+        pending_text += decoder.decode(b"", final=True)
+        stop_index = _find_stop_index(pending_text, stop_strings)
+        if stop_index is not None:
+            pending_text = pending_text[:stop_index]
+        if pending_text:
+            yield pending_text
 
     async def rewind(self, pos: int) -> None:
         await self._call_session(

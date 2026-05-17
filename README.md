@@ -228,16 +228,15 @@ make wheel-smoke
 ## Async Token Streaming
 
 `pyds4.AsyncEngine` owns a synchronous DS4 engine on one worker thread and
-serializes all native calls through that owner. `AsyncSession.next_token()` is
-the recommended helper for streaming loops because token selection, optional
-EOS handling, decoding, and session advancement happen as one serialized
-operation.
+serializes all native calls through that owner. `AsyncSession.stream_text()`
+is the recommended helper for plain decoded text because it handles UTF-8
+decoding, stop-string buffering, EOS suppression, and session advancement on
+top of the lower-level `AsyncSession.next_token()` primitive.
 
 ```python
 from __future__ import annotations
 
 import asyncio
-import codecs
 from collections.abc import AsyncIterator
 
 import pyds4
@@ -264,7 +263,6 @@ async def stream_ds4_tokens(
         top_p=0.95,
         min_p=0.0,
     )
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     async with pyds4.AsyncEngine(options) as engine:
         think_mode = pyds4.think_mode_for_context(
@@ -279,19 +277,12 @@ async def stream_ds4_tokens(
 
         async with await engine.create_session(ctx_size) as session:
             await session.sync(prompt_tokens)
-
-            for _ in range(max_new_tokens):
-                step = await session.next_token(sampling, decode=True)
-                if step.is_eos:
-                    break
-                if step.token_bytes:
-                    text = decoder.decode(step.token_bytes, final=False)
-                    if text:
-                        yield text
-
-    tail = decoder.decode(b"", final=True)
-    if tail:
-        yield tail
+            generation = pyds4.GenerationOptions(
+                max_new_tokens=max_new_tokens,
+                sampling=sampling,
+            )
+            async for chunk in session.stream_text(generation):
+                yield chunk
 
 
 async def main() -> None:
@@ -324,6 +315,9 @@ python examples/generate_text_async.py \
   interface.
 - `pyds4.AsyncEngine` and `pyds4.AsyncSession` provide an asyncio facade for
   applications that need incremental streaming.
+- `AsyncSession.stream_text()` provides framework-neutral decoded text
+  streaming with stop-string buffering, incremental UTF-8 decoding, EOS
+  suppression, and the same mutating-cancellation policy as `next_token()`.
 - `pyds4.EngineOptions` configures model path, backend, MTP options, threading,
   steering options, and native startup log replay.
 - `pyds4.SamplingOptions` configures temperature, top-k, top-p, min-p, and
