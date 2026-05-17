@@ -331,8 +331,9 @@ python examples/generate_text_async.py \
   not depend on Avalan response or tool objects.
 - `pyds4.dsml` provides import-safe, framework-neutral DSML data classes plus
   DS4 tool prompt rendering, canonical assistant tool-call rendering, tool
-  result rendering, and generated DSML parsing. These helpers do not import
-  Avalan or native DS4 extension objects.
+  result rendering, generated DSML parsing, and incremental argument-delta
+  extraction from growing DSML blocks. These helpers do not import Avalan or
+  native DS4 extension objects.
 - `Session.eval_speculative_argmax()` and
   `AsyncSession.eval_speculative_argmax()` expose DS4's greedy MTP speculative
   step when the engine was opened with an MTP model and draft depth greater

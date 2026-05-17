@@ -104,6 +104,13 @@ def _validate_nonempty_str(name: str, value: str) -> None:
         raise ValueError(f"{name} must not be empty.")
 
 
+def _validate_non_negative_offset(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer character offset.")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative.")
+
+
 def _normalize_json_value(name: str, value: object) -> JsonValue:
     if value is None or isinstance(value, str | bool):
         return value
@@ -611,6 +618,51 @@ def tool_call_start_span(text: str) -> tuple[int, int] | None:
     return (match.start(), match.end()) if match else None
 
 
+def stream_argument_deltas(
+    raw_dsml: str,
+    emitted_until: int,
+) -> tuple[tuple[str, ...], int]:
+    """Return new DSML parameter-value deltas from a growing DSML block.
+
+    ``emitted_until`` is an absolute Python string character offset into
+    ``raw_dsml``. Pass the returned offset into the next call for the same
+    growing block. Incomplete parameter close tags are retained so DSML tag
+    text is not emitted as argument data.
+    """
+    _validate_str("raw_dsml", raw_dsml)
+    _validate_non_negative_offset("emitted_until", emitted_until)
+
+    deltas: list[str] = []
+    cursor = 0
+    new_emitted_until = emitted_until
+    keep = max(len(marker) for marker in PARAMETER_END_MARKERS) - 1
+
+    while True:
+        start_match = _PARAM_START_RE.search(raw_dsml, cursor)
+        if not start_match:
+            break
+
+        value_start = start_match.end()
+        end_index = _first_parameter_end_index(raw_dsml, value_start)
+        if end_index is None:
+            value_end = max(value_start, len(raw_dsml) - keep)
+            next_cursor = len(raw_dsml)
+        else:
+            value_end = end_index
+            next_cursor = _parameter_end_after(raw_dsml, end_index)
+
+        segment_start = max(value_start, new_emitted_until)
+        if segment_start < value_end:
+            deltas.append(raw_dsml[segment_start:value_end])
+            new_emitted_until = value_end
+
+        if end_index is None:
+            break
+        cursor = next_cursor
+
+    return tuple(delta for delta in deltas if delta), new_emitted_until
+
+
 def split_reasoning(text: str) -> tuple[str, str | None]:
     """Return visible content and optional DSML thinking text."""
     _validate_str("text", text)
@@ -736,6 +788,23 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
         cursor = param_match.end()
 
 
+def _first_parameter_end_index(text: str, start: int) -> int | None:
+    indexes = [
+        index
+        for marker in PARAMETER_END_MARKERS
+        for index in (text.find(marker, start),)
+        if index >= 0
+    ]
+    return min(indexes) if indexes else None
+
+
+def _parameter_end_after(text: str, index: int) -> int:
+    for marker in PARAMETER_END_MARKERS:
+        if text.startswith(marker, index):
+            return index + len(marker)
+    return index
+
+
 def _parse_attrs(text: str) -> dict[str, str]:
     return {
         name: html.unescape(value)
@@ -814,6 +883,7 @@ __all__ = [
     "render_tool_calls",
     "render_tool_result",
     "split_reasoning",
+    "stream_argument_deltas",
     "tool_call_start_span",
     "tool_schema_text",
     "tools_prompt",

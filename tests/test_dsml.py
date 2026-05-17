@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pyds4.dsml import (
+    PARAMETER_END_MARKERS,
     DsmlMessage,
     DsmlMessageRole,
     DsmlParseResult,
@@ -21,6 +22,7 @@ from pyds4.dsml import (
     render_tool_calls,
     render_tool_result,
     split_reasoning,
+    stream_argument_deltas,
     tool_call_start_span,
     tool_schema_text,
     tools_prompt,
@@ -314,6 +316,92 @@ def test_parse_generated_dsml_without_tool_calls_returns_content() -> None:
 def test_tool_call_start_span_returns_exact_span() -> None:
     assert tool_call_start_span("hello\n\n<tool_calls>") == (5, 19)
     assert tool_call_start_span("plain") is None
+
+
+def test_stream_argument_deltas_emits_complete_parameter_values() -> None:
+    raw = (
+        "<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="math.calculator">\n'
+        '<｜DSML｜parameter name="expression" string="true">2 + 2'
+        "</｜DSML｜parameter>\n"
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜tool_calls>"
+    )
+
+    deltas, offset = stream_argument_deltas(raw, 0)
+
+    assert deltas == ("2 + 2",)
+    assert offset == raw.index("</｜DSML｜parameter>")
+
+
+def test_stream_argument_deltas_withholds_incomplete_close_tags() -> None:
+    prefix = (
+        "<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="math.calculator">\n'
+        '<｜DSML｜parameter name="expression" string="true">'
+    )
+    raw = f"{prefix}{'x' * 30}</｜DSML｜para"
+    keep = max(len(marker) for marker in PARAMETER_END_MARKERS) - 1
+    safe_count = max(0, len(raw) - len(prefix) - keep)
+
+    deltas, offset = stream_argument_deltas(raw, 0)
+
+    assert deltas == ("x" * safe_count,)
+    assert offset == len(prefix) + safe_count
+
+    completed = f"{raw}meter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>"
+    final_deltas, final_offset = stream_argument_deltas(completed, offset)
+
+    assert final_deltas == ("x" * (30 - safe_count),)
+    assert final_offset == completed.index("</｜DSML｜parameter>")
+
+
+def test_stream_argument_deltas_emits_multiple_parameters_in_order() -> None:
+    raw = (
+        "<tool_calls>\n"
+        '<invoke name="math.calculator">\n'
+        '<parameter name="expression" string="true">2 + 2</parameter>\n'
+        '<parameter name="precision" string="false">2</parameter>\n'
+        "</invoke>\n"
+        "</tool_calls>"
+    )
+
+    deltas, offset = stream_argument_deltas(raw, 0)
+
+    assert deltas == ("2 + 2", "2")
+    assert offset == raw.index("</parameter>", raw.index(">2</parameter>"))
+
+
+def test_stream_argument_deltas_rejects_invalid_offsets() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        stream_argument_deltas("", -1)
+
+    with pytest.raises(TypeError, match="integer character offset"):
+        stream_argument_deltas("", False)
+
+
+def test_stream_argument_deltas_does_not_emit_tag_text() -> None:
+    raw = (
+        "<DSML｜tool_calls>\n"
+        '<DSML｜invoke name="math.calculator">\n'
+        '<DSML｜parameter name="expression" string="true">2 + '
+    )
+    deltas, offset = stream_argument_deltas(raw, 0)
+
+    assert deltas == ()
+    assert offset == 0
+
+    raw += "2</DSML｜parameter>\n"
+    raw += "</DSML｜invoke>\n</DSML｜tool_calls>"
+    deltas, next_offset = stream_argument_deltas(raw, offset)
+
+    assert deltas == ("2 + 2",)
+    assert next_offset == raw.index("</DSML｜parameter>")
+
+    deltas, final_offset = stream_argument_deltas(raw, next_offset)
+
+    assert deltas == ()
+    assert final_offset == next_offset
 
 
 def test_parse_generated_dsml_reports_incomplete_blocks() -> None:
