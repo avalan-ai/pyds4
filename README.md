@@ -141,6 +141,17 @@ generation = pyds4.GenerationOptions(
 )
 ```
 
+If you build your own token loop but want the same stop-string behavior,
+`StopStringBuffer` exposes the generic buffering used by `stream_text()`:
+
+```python
+buffer = pyds4.StopStringBuffer(["</s>", "STOP"])
+for chunk in buffer.push(decoded_token_text):
+    print(chunk, end="")
+for chunk in buffer.flush():
+    print(chunk, end="")
+```
+
 ## Runnable Examples
 
 The [async example](examples/generate_text_async.py) exposes the common knobs
@@ -336,6 +347,16 @@ DS4_SOURCE_DIR=/path/to/ds4 \
 PYDS4_BACKEND=cuda \
 CUDA_ARCH=90 \
 python -m pip install --no-binary=pyds4 pyds4
+```
+
+To build this checkout and install it into a specific project's virtual
+environment, point `PYTHON` at that project's interpreter:
+
+```sh
+DS4_SOURCE_DIR=.local/ds4 \
+PYDS4_BACKEND=metal \
+PYTHON=/path/to/project/.venv/bin/python \
+make ds4-bridge
 ```
 
 If `DS4_SOURCE_DIR` is omitted during a source build, the package remains

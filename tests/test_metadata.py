@@ -37,6 +37,7 @@ _DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES = frozenset(
         "REQUIRED_C_SYMBOLS",
         "SamplingOptions",
         "Session",
+        "StopStringBuffer",
         "ThinkMode",
         "TokenScore",
         "TokenScoreMode",

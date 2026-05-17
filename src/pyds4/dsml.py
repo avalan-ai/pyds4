@@ -904,6 +904,11 @@ def _parse_attrs(
                 f"{tag_name} tag contains malformed attribute syntax",
             )
         name, double_quoted, single_quoted = attr_match.groups()
+        if name in attrs:
+            return (
+                {},
+                f"{tag_name} tag contains duplicate attribute {name!r}",
+            )
         value = double_quoted if double_quoted is not None else single_quoted
         attrs[name] = html.unescape(value or "")
         position = attr_match.end()

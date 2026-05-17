@@ -96,6 +96,11 @@ def test_public_type_defaults_and_enum_coercion() -> None:
     assert generation.scores == pyds4.GenerationScoreOptions()
     assert generation.advance is True
 
+    stop_buffer = pyds4.StopStringBuffer(["stop"])
+    assert stop_buffer.stop_strings == ("stop",)
+    assert stop_buffer.stopped is False
+    assert stop_buffer.pending_text == ""
+
 
 def test_public_types_are_frozen_and_slotted() -> None:
     options = pyds4.EngineOptions(model_path="model.gguf")
@@ -169,6 +174,10 @@ def test_public_types_are_frozen_and_slotted() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         generation.extra = True  # type: ignore[attr-defined]
+
+    stop_buffer = pyds4.StopStringBuffer("stop")
+    with pytest.raises((AttributeError, TypeError)):
+        stop_buffer.extra = True  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -335,6 +344,68 @@ def test_generation_options_reject_invalid_values(
 ) -> None:
     with pytest.raises((TypeError, ValueError), match=error_match):
         pyds4.GenerationOptions(**kwargs)  # type: ignore[arg-type]
+
+
+def test_stop_string_buffer_emits_plain_chunks_without_stops() -> None:
+    buffer = pyds4.StopStringBuffer()
+
+    assert buffer.stop_strings == ()
+    assert buffer.push("alpha") == ("alpha",)
+    assert buffer.push("") == ()
+    assert buffer.flush() == ()
+    assert buffer.stopped is False
+
+
+def test_stop_string_buffer_suppresses_stop_within_chunk() -> None:
+    buffer = pyds4.StopStringBuffer(" STOP")
+
+    assert buffer.push("alpha STOP omega") == ("alpha",)
+    assert buffer.stopped is True
+    assert buffer.pending_text == ""
+    assert buffer.push("ignored") == ()
+    assert buffer.flush() == ()
+
+
+def test_stop_string_buffer_suppresses_stop_across_chunks() -> None:
+    buffer = pyds4.StopStringBuffer(["STOP"])
+
+    assert buffer.push("alpha ST") == ("alpha",)
+    assert buffer.pending_text == " ST"
+    assert buffer.push("OP omega") == (" ",)
+    assert buffer.stopped is True
+    assert buffer.flush() == ()
+
+
+def test_stop_string_buffer_flushes_without_stop() -> None:
+    buffer = pyds4.StopStringBuffer(("STOP",))
+
+    assert buffer.push("abcd") == ("a",)
+    assert buffer.push("e") == ("b",)
+    assert buffer.flush() == ("cde",)
+
+
+@pytest.mark.parametrize(
+    ("stop_strings", "error_match"),
+    [
+        ("", "stop_strings"),
+        ([""], "stop_strings"),
+        ([1], "stop_strings"),
+        ({">"}, "stop_strings"),
+    ],
+)
+def test_stop_string_buffer_rejects_invalid_stop_strings(
+    stop_strings: object,
+    error_match: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=error_match):
+        pyds4.StopStringBuffer(stop_strings)  # type: ignore[arg-type]
+
+
+def test_stop_string_buffer_rejects_non_string_text() -> None:
+    buffer = pyds4.StopStringBuffer("STOP")
+
+    with pytest.raises(TypeError, match="text"):
+        buffer.push(b"bad")  # type: ignore[arg-type]
 
 
 def test_generation_step_carries_decoded_text_and_scores() -> None:

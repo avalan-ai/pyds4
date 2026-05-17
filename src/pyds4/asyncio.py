@@ -24,6 +24,7 @@ from .types import (
     GenerationStep,
     ProgressEvent,
     SamplingOptions,
+    StopStringBuffer,
     ThinkMode,
     TokenScore,
     TokenScoreMode,
@@ -89,18 +90,6 @@ def _requests_top_logprobs(options: GenerationScoreOptions) -> bool:
         TokenScoreMode.TOP_LOGPROBS,
         TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
     }
-
-
-def _find_stop_index(
-    text: str,
-    stop_strings: tuple[str, ...],
-) -> int | None:
-    stop_index: int | None = None
-    for stop_string in stop_strings:
-        index = text.find(stop_string)
-        if index >= 0 and (stop_index is None or index < stop_index):
-            stop_index = index
-    return stop_index
 
 
 def _context_error_from_generation_error(
@@ -651,14 +640,8 @@ class AsyncSession:
         generation_options: GenerationOptions,
     ) -> AsyncIterator[str]:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        pending_text = ""
-        stop_strings = cast(tuple[str, ...], generation_options.stop_strings)
-        stop_buffer_chars = (
-            max(
-                (len(stop_string) for stop_string in stop_strings),
-                default=0,
-            )
-            - 1
+        stop_buffer = StopStringBuffer(
+            cast(tuple[str, ...], generation_options.stop_strings)
         )
 
         for _ in range(generation_options.max_new_tokens):
@@ -678,34 +661,16 @@ class AsyncSession:
             if step.is_eos:
                 break
             if step.token_bytes:
-                pending_text += decoder.decode(
-                    step.token_bytes,
-                    final=False,
-                )
-
-            stop_index = _find_stop_index(pending_text, stop_strings)
-            if stop_index is not None:
-                chunk = pending_text[:stop_index]
-                if chunk:
+                text = decoder.decode(step.token_bytes, final=False)
+                for chunk in stop_buffer.push(text):
                     yield chunk
-                return
+                if stop_buffer.stopped:
+                    return
 
-            if stop_buffer_chars <= 0:
-                if pending_text:
-                    yield pending_text
-                    pending_text = ""
-            elif len(pending_text) > stop_buffer_chars:
-                chunk = pending_text[:-stop_buffer_chars]
-                pending_text = pending_text[-stop_buffer_chars:]
-                if chunk:
-                    yield chunk
-
-        pending_text += decoder.decode(b"", final=True)
-        stop_index = _find_stop_index(pending_text, stop_strings)
-        if stop_index is not None:
-            pending_text = pending_text[:stop_index]
-        if pending_text:
-            yield pending_text
+        for chunk in stop_buffer.push(decoder.decode(b"", final=True)):
+            yield chunk
+        for chunk in stop_buffer.flush():
+            yield chunk
 
     async def rewind(self, pos: int) -> None:
         await self._call_session(

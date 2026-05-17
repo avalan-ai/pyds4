@@ -355,6 +355,81 @@ class GenerationOptions:
         _validate_bool("advance", self.advance)
 
 
+class StopStringBuffer:
+    """Buffer text chunks so configured stop strings are never emitted."""
+
+    __slots__ = ("_keep", "_pending", "_stop_strings", "_stopped")
+
+    def __init__(
+        self,
+        stop_strings: str | list[str] | tuple[str, ...] = (),
+    ) -> None:
+        self._stop_strings = _validate_stop_strings(stop_strings)
+        self._pending = ""
+        self._stopped = False
+        self._keep = (
+            max(len(stop_string) for stop_string in self._stop_strings) - 1
+            if self._stop_strings
+            else 0
+        )
+
+    @property
+    def stop_strings(self) -> tuple[str, ...]:
+        """Return the normalized stop strings."""
+        return self._stop_strings
+
+    @property
+    def stopped(self) -> bool:
+        """Return whether a stop string has been seen."""
+        return self._stopped
+
+    @property
+    def pending_text(self) -> str:
+        """Return buffered text that is not yet safe to emit."""
+        return self._pending
+
+    def push(self, text: str) -> tuple[str, ...]:
+        """Push text into the buffer and return safe output chunks."""
+        _validate_str("text", text)
+        if self._stopped:
+            return ()
+        if not self._stop_strings:
+            return (text,) if text else ()
+
+        self._pending += text
+        stop_index = self._stop_index()
+        if stop_index is not None:
+            text_before_stop = self._pending[:stop_index]
+            self._pending = ""
+            self._stopped = True
+            return (text_before_stop,) if text_before_stop else ()
+
+        emit_length = len(self._pending) - self._keep
+        if emit_length <= 0:
+            return ()
+
+        chunk = self._pending[:emit_length]
+        self._pending = self._pending[emit_length:]
+        return (chunk,) if chunk else ()
+
+    def flush(self) -> tuple[str, ...]:
+        """Return any pending text when generation ended without a stop."""
+        if self._pending and not self._stopped:
+            chunk = self._pending
+            self._pending = ""
+            return (chunk,)
+        self._pending = ""
+        return ()
+
+    def _stop_index(self) -> int | None:
+        first_index: int | None = None
+        for stop_string in self._stop_strings:
+            index = self._pending.find(stop_string)
+            if index >= 0 and (first_index is None or index < first_index):
+                first_index = index
+        return first_index
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationStep:
     """Describe one candidate token selected by an async generation helper."""
