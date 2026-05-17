@@ -12,6 +12,7 @@ import pytest
 import pyds4
 
 pyds4_asyncio = importlib.import_module("pyds4.asyncio")
+TEST_BACKEND = pyds4.__ds4_native_backend__
 
 
 class RecordingSession:
@@ -551,7 +552,7 @@ def _engine_with_state(state: object) -> pyds4.Engine:
     engine = pyds4.Engine.__new__(pyds4.Engine)
     engine._state = state
     engine.options = pyds4.EngineOptions(
-        model_path="model.gguf", backend="cpu"
+        model_path="model.gguf", backend=TEST_BACKEND
     )
     return engine
 
@@ -596,7 +597,9 @@ def test_async_engine_open_failure_stops_worker_and_allows_retry(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", open_sync_engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         engine = pyds4_asyncio.AsyncEngine(options)
 
         with pytest.raises(pyds4.Ds4LoadError, match="native open failed"):
@@ -642,7 +645,9 @@ def test_async_engine_open_cancellation_stops_worker_and_closes_result(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", SlowOpenEngine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         engine = pyds4_asyncio.AsyncEngine(options)
         open_task = asyncio.create_task(engine._ensure_open())
 
@@ -680,7 +685,9 @@ def test_async_engine_methods_mirror_sync_validation_errors(
     validating_sync_engine: _ValidatingEngineState,
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             with pytest.raises(TypeError, match="ctx_size"):
@@ -756,7 +763,9 @@ def test_async_engine_metadata_mirrors_sync_validation_errors(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             with pytest.raises(pyds4.Ds4LoadError, match=error_match):
@@ -805,7 +814,9 @@ def test_async_engine_generation_failures_mirror_sync_error_mapping(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             with pytest.raises(
@@ -824,7 +835,9 @@ def test_async_create_session_mirrors_sync_context_error_mapping(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             with pytest.raises(pyds4.Ds4ContextError) as caught:
@@ -842,7 +855,9 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
 ) -> None:
     async def scenario() -> None:
         main_thread_id = threading.get_ident()
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             tokenized = await asyncio.gather(
@@ -925,7 +940,9 @@ def test_async_session_progress_events_are_queued(
     recording_engine.session_type = RecordingProgressSession
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -948,7 +965,9 @@ def test_async_session_methods_mirror_sync_validation_errors(
     validating_sync_engine: _ValidatingEngineState,
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1050,7 +1069,9 @@ def test_async_session_properties_mirror_sync_validation_errors(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             async with await async_engine.create_session(64) as session:
@@ -1095,7 +1116,9 @@ def test_async_session_generation_failures_mirror_sync_error_mapping(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             async with await async_engine.create_session(64) as session:
@@ -1116,7 +1139,9 @@ def test_async_next_token_eval_failure_mirrors_sync_error_mapping(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             async with await async_engine.create_session(64) as session:
@@ -1133,7 +1158,9 @@ def test_async_chat_append_mutates_original_only_after_success(
     recording_engine: type[RecordingEngine],
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             tokens = [1]
@@ -1166,7 +1193,9 @@ def test_async_cancelled_chat_append_does_not_mutate_original(
         release = threading.Event()
         recording_engine.block_first_chat_append = started
         recording_engine.release_first_chat_append = release
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             tokens = [1]
@@ -1203,7 +1232,9 @@ def test_async_next_token_selects_decodes_and_commits_in_one_job(
     recording_engine: type[RecordingEngine],
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1260,7 +1291,9 @@ def test_async_next_token_stops_before_eos_eval_and_decode(
 ) -> None:
     async def scenario() -> None:
         recording_engine.next_argmax_token = 6
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1288,7 +1321,9 @@ def test_async_next_token_can_include_scores_before_eval(
     recording_engine.token_texts = {101: b"A"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         scores = pyds4.GenerationScoreOptions(
             mode=pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
             top_k=2,
@@ -1337,7 +1372,9 @@ def test_async_next_token_skips_scores_for_stop_eos(
     recording_engine.next_argmax_token = 6
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         scores = pyds4.GenerationScoreOptions(
             mode=pyds4.TokenScoreMode.TOKEN_LOGPROB,
         )
@@ -1369,7 +1406,9 @@ def test_async_next_token_decoded_text_replaces_invalid_utf8(
     recording_engine.token_texts = {101: b"\xff"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1391,7 +1430,9 @@ def test_async_next_token_rejects_sampling_with_exclusion(
     recording_engine: type[RecordingEngine],
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1411,7 +1452,9 @@ def test_async_stream_text_greedy_decodes_and_advances(
     recording_engine.token_texts = {101: b"A", 102: b"B", 103: b"C"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1457,7 +1500,9 @@ def test_async_stream_text_sampling_uses_sampling_options(
     recording_engine.token_texts = {201: b"x", 202: b"y"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         generation_options = pyds4.GenerationOptions(
             max_new_tokens=2,
             sampling=pyds4.SamplingOptions(temperature=0.7, seed=7),
@@ -1490,7 +1535,9 @@ def test_async_stream_text_suppresses_stop_string_within_token(
     }
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         generation_options = pyds4.GenerationOptions(
             max_new_tokens=2,
             stop_strings=" STOP",
@@ -1523,7 +1570,9 @@ def test_async_stream_text_suppresses_stop_string_across_tokens(
     }
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         generation_options = pyds4.GenerationOptions(
             max_new_tokens=3,
             stop_strings="STOP",
@@ -1552,7 +1601,9 @@ def test_async_stream_text_decodes_split_utf8(
     recording_engine.token_texts = {131: b"caf", 132: b"\xc3", 133: b"\xa9"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1575,7 +1626,9 @@ def test_async_stream_text_stops_before_eos_text(
     recording_engine.token_texts = {101: b"A", 6: b"<eos>", 102: b"B"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1602,7 +1655,9 @@ def test_async_generate_text_matches_joined_stream_chunks(
     recording_engine.token_texts = {101: b"A", 102: b"B", 103: b"C"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         generation = pyds4.GenerationOptions(max_new_tokens=3)
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
@@ -1629,7 +1684,9 @@ def test_async_generate_text_respects_max_token_limit(
     recording_engine.token_texts = {111: b"X", 112: b"Y", 113: b"Z"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1653,7 +1710,9 @@ def test_async_generate_text_stops_at_eos(
     recording_engine.token_texts = {101: b"A", 6: b"<eos>", 102: b"B"}
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1674,7 +1733,9 @@ def test_async_generate_text_closed_session_and_engine_errors(
     recording_engine: type[RecordingEngine],
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
         generation = pyds4.GenerationOptions(max_new_tokens=1)
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
@@ -1696,7 +1757,9 @@ def test_async_generate_text_rejects_invalid_options_before_native_call(
     recording_engine: type[RecordingEngine],
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1747,7 +1810,9 @@ def test_async_stream_text_generation_failures_mirror_sync_error_mapping(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             async with await async_engine.create_session(64) as session:
@@ -1769,7 +1834,9 @@ def test_async_stream_text_context_overflow_maps_to_context_error(
     monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
 
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as async_engine:
             async with await async_engine.create_session(64) as session:
@@ -1789,7 +1856,9 @@ def test_async_stream_text_rejects_invalid_generation_options(
     recording_engine: type[RecordingEngine],
 ) -> None:
     async def scenario() -> None:
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -1810,7 +1879,9 @@ def test_async_stream_text_cancellation_poisons_session(
         recording_engine.block_first_eval = started
         recording_engine.release_first_eval = release
         recording_engine.token_texts = {101: b"A"}
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             session = await engine.create_session(64)
@@ -1848,7 +1919,9 @@ def test_async_queued_cancelled_job_is_not_run(
         release = threading.Event()
         recording_engine.block_first_tokenize = started
         recording_engine.release_first_tokenize = release
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             first = asyncio.create_task(engine.tokenize_text("block"))
@@ -1881,7 +1954,9 @@ def test_async_in_flight_non_mutating_cancellation_discards_result(
         release = threading.Event()
         recording_engine.block_first_tokenize = started
         recording_engine.release_first_tokenize = release
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             task = asyncio.create_task(engine.tokenize_text("block"))
@@ -1918,7 +1993,9 @@ def test_async_engine_close_is_shielded_from_caller_cancellation(
         close_release = threading.Event()
         recording_engine.close_started = close_started
         recording_engine.close_release = close_release
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         engine = await pyds4_asyncio.AsyncEngine.open(options)
         close_task = asyncio.create_task(engine.aclose())
@@ -1949,7 +2026,9 @@ def test_async_session_close_is_shielded_from_caller_cancellation(
         close_release = threading.Event()
         RecordingSession.close_started = close_started
         RecordingSession.close_release = close_release
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             session = await engine.create_session(64)
@@ -1987,7 +2066,9 @@ def test_async_in_flight_mutating_cancellation_poisons_session(
         release = threading.Event()
         recording_engine.block_first_eval = started
         recording_engine.release_first_eval = release
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4_asyncio.AsyncEngine(options) as engine:
             session = await engine.create_session(64)
@@ -2029,7 +2110,9 @@ def test_async_fake_native_context_managers_close_resources_once() -> None:
 
     async def scenario() -> None:
         native.fake_reset_counters()
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -2060,7 +2143,9 @@ def test_async_fake_native_progress_notifications_are_queued() -> None:
 
     async def scenario() -> None:
         native.fake_reset_counters()
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -2085,7 +2170,9 @@ def test_async_fake_native_snapshot_and_payload_round_trip() -> None:
 
     async def scenario() -> None:
         native.fake_reset_counters()
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4.AsyncEngine(options) as engine:
             async with await engine.create_session(64) as session:
@@ -2128,7 +2215,7 @@ def test_async_fake_native_speculative_eval_runs_on_owner_thread() -> None:
         native.fake_reset_counters()
         options = pyds4.EngineOptions(
             model_path="model.gguf",
-            backend="cpu",
+            backend=TEST_BACKEND,
             mtp_path="mtp.gguf",
             mtp_draft_tokens=4,
         )
@@ -2165,7 +2252,9 @@ def test_async_fake_native_mutating_cancellation_closes_session(
     async def scenario() -> None:
         native.fake_reset_counters()
         monkeypatch.setenv("PYDS4_FAKE_DELAY_EVAL_MS", "200")
-        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        options = pyds4.EngineOptions(
+            model_path="model.gguf", backend=TEST_BACKEND
+        )
 
         async with pyds4.AsyncEngine(options) as engine:
             session = await engine.create_session(64)

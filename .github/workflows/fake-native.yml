@@ -5,15 +5,17 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+  macos-metal-test:
+    name: Metal / Python ${{ matrix.python-version }}
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
         python-version:
           - "3.11"
           - "3.12"
+          - "3.13"
+          - "3.14"
 
     steps:
       - uses: actions/checkout@v4
@@ -23,12 +25,60 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install fake-native test build
+        env:
+          PYDS4_BACKEND: metal
+          PYDS4_USE_FAKE_DS4: "1"
         run: |
           python -m pip install --upgrade pip
-          PYDS4_USE_FAKE_DS4=1 PYDS4_BACKEND=cpu python -m pip install -e '.[test]'
+          python -m pip install -e '.[test]'
 
       - name: Run tests
         run: python -m pytest -q
+
+  linux-cuda-test:
+    name: CUDA / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.6.3-devel-ubuntu24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git gzip make tar
+          rm -rf /var/lib/apt/lists/*
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install fake-native test build
+        env:
+          PYDS4_BACKEND: cuda
+          PYDS4_USE_FAKE_DS4: "1"
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+
+      - name: Run tests
+        run: python -m pytest -q
+
+  native-cpp-test:
+    name: Native C++ fake tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Run native C++ tests
         run: make test-cpp

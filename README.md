@@ -432,7 +432,7 @@ make wheel-smoke
 `pyproject.toml` is the version source. For a new release, bump it and commit:
 
 ```sh
-make version VERSION=1.0.1
+make version VERSION=1.0.2
 ```
 
 Build and publish one backend wheel plus the sdist:
@@ -444,7 +444,8 @@ DS4_SOURCE_DIR=/path/to/ds4 PYDS4_BACKEND=metal make release
 Use `PYDS4_BACKEND=cuda` on a CUDA Linux build host to produce the NVIDIA
 wheel. Metal and CUDA wheels can be uploaded for the same `pyds4` version
 because they have different platform tags. The GitHub `Release` workflow
-builds the sdist, macOS arm64 Metal wheels, and Linux x86_64 CUDA wheels.
+builds the sdist, macOS arm64 Metal wheels, and Linux x86_64 CUDA wheels for
+Python 3.11 through 3.14.
 The `cuda_arch` workflow input controls the NVIDIA architecture passed to
 CMake.
 

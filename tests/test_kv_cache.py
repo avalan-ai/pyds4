@@ -264,7 +264,7 @@ def test_kv_cache_metadata_rejects_invalid_payload_file() -> None:
             version=DS4_KV_CACHE_VERSION,
             key="key",
             model_namespace="model-a",
-            pyds4_version="1.0.1",
+            pyds4_version="1.0.2",
             ds4_commit="commit",
             backend="metal",
             ctx_size=4096,
@@ -281,7 +281,7 @@ def test_kv_cache_metadata_rejects_path_like_keys(key: str) -> None:
             version=DS4_KV_CACHE_VERSION,
             key=key,
             model_namespace="model-a",
-            pyds4_version="1.0.1",
+            pyds4_version="1.0.2",
             ds4_commit="commit",
             backend="metal",
             ctx_size=4096,
@@ -318,9 +318,10 @@ def test_kv_cache_hit_restores_fake_native_session(tmp_path: Path) -> None:
         pytest.skip("requires a PYDS4_USE_FAKE_DS4 build")
 
     native.fake_reset_counters()
-    cache = Ds4DiskKvCache(tmp_path, "model-a", backend="cpu")
+    backend = pyds4.__ds4_native_backend__
+    cache = Ds4DiskKvCache(tmp_path, "model-a", backend=backend)
 
-    options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+    options = pyds4.EngineOptions(model_path="model.gguf", backend=backend)
     with pyds4.Engine(options) as engine:
         source = engine.create_session(64)
         target = engine.create_session(64)

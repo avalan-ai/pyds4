@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pyds4"
-version = "1.0.1"
+version = "1.0.2"
 description = "Python bindings for the DS4 native inference engine"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,6 +22,8 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: C++",
 ]
 

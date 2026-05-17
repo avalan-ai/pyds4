@@ -44,7 +44,7 @@ DS4_SOURCE_DIR=/path/to/ds4 PYDS4_BACKEND=metal \
 
 Run the `Release` workflow manually with the version to publish. The workflow
 checks that `pyproject.toml` already contains that version, builds the sdist
-and backend wheels for Python 3.11 and 3.12, publishes PyPI-compatible
+and backend wheels for Python 3.11 through 3.14, publishes PyPI-compatible
 distributions through PyPI trusted publishing, tags the commit, and creates a
 GitHub release with all built distributions attached.
 
@@ -66,7 +66,7 @@ must provide compatible NVIDIA CUDA 12 runtime libraries on the target host.
 1. Update the version:
 
    ```sh
-   make version VERSION=1.0.1
+   make version VERSION=1.0.2
    ```
 
 2. Run the tests you need for the change, commit the version bump, and merge it

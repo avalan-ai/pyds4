@@ -13,6 +13,8 @@ _native = pytest.importorskip("pyds4._native")
 if not getattr(_native, "__ds4_fake_native__", False):
     pytest.skip("requires a PYDS4_USE_FAKE_DS4 build", allow_module_level=True)
 
+FAKE_BACKEND = pyds4.__ds4_native_backend__
+
 
 @pytest.fixture(autouse=True)
 def reset_fake_counters() -> Iterator[None]:
@@ -30,7 +32,7 @@ def counters() -> dict[str, int]:
 def make_engine(**kwargs: object) -> pyds4.Engine:
     option_values: dict[str, object] = {
         "model_path": "model.gguf",
-        "backend": "cpu",
+        "backend": FAKE_BACKEND,
     }
     option_values.update(kwargs)
     options = pyds4.EngineOptions(**option_values)  # type: ignore[arg-type]
@@ -44,8 +46,8 @@ def text_tokens(text: str) -> list[int]:
 def test_fake_native_capabilities_match_bound_runtime_surface() -> None:
     caps = pyds4.capabilities()
 
-    assert caps.backend == "cpu"
-    assert caps.available_backends == ("cpu",)
+    assert caps.backend == FAKE_BACKEND
+    assert caps.available_backends == (FAKE_BACKEND,)
     assert caps.required_symbols == tuple(pyds4.REQUIRED_C_SYMBOLS)
     assert caps.progress is True
     assert caps.mtp is True
@@ -977,7 +979,7 @@ def test_sample_rejects_invalid_options_before_native_call() -> None:
 def test_native_session_sample_rejects_invalid_seed_range(seed: int) -> None:
     engine_state = _native.EngineState(
         "model.gguf",
-        "cpu",
+        FAKE_BACKEND,
         None,
         0,
         0,
