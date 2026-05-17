@@ -832,9 +832,15 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
         if not name:
             return arguments, "parameter tag is missing a name attribute"
         parameter_name = html.unescape(name)
+        string_mode = attrs.get("string", "true")
+        if string_mode not in {"true", "false"}:
+            return (
+                arguments,
+                'parameter tag string attribute must be "true" or "false"',
+            )
         raw_value = param_match.group(2)
         value: JsonValue
-        if attrs.get("string") == "false":
+        if string_mode == "false":
             try:
                 value = _normalize_json_value(
                     f"parameter {parameter_name}",

@@ -385,6 +385,21 @@ def test_parse_generated_dsml_accepts_xml_attribute_quote_variants() -> None:
     }
 
 
+def test_parse_generated_dsml_omitted_string_attribute_is_text() -> None:
+    text = (
+        "<tool_calls>"
+        '<invoke name="math.calculator">'
+        '<parameter name="expression">{"x":1}</parameter>'
+        "</invoke>"
+        "</tool_calls>"
+    )
+
+    parsed = parse_generated_message(text)
+
+    assert parsed.status is DsmlParseStatus.COMPLETE
+    assert parsed.calls[0].arguments == {"expression": '{"x":1}'}
+
+
 def test_parse_generated_dsml_extracts_multiple_invokes_in_order() -> None:
     text = (
         "<tool_calls>"
@@ -665,6 +680,36 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "</tool_calls>"
             ),
             "parameter tag contains malformed attribute syntax",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="value" string="">{"x":1}</parameter>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            'parameter tag string attribute must be "true" or "false"',
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="value" string="maybe">{"x":1}</parameter>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            'parameter tag string attribute must be "true" or "false"',
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="value" string="False">{"x":1}</parameter>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            'parameter tag string attribute must be "true" or "false"',
         ),
         (
             (

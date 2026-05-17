@@ -1128,12 +1128,14 @@ def test_async_next_token_selects_decodes_and_commits_in_one_job(
                     is_eos=False,
                     advanced=True,
                     token_bytes=b"g",
+                    decoded_text="g",
                 )
                 assert second == pyds4.GenerationStep(
                     token_id=103,
                     is_eos=False,
                     advanced=True,
                     token_bytes=b"g",
+                    decoded_text="g",
                 )
                 assert await session.tokens == [1, 2, 103, 103]
 
@@ -1206,6 +1208,7 @@ def test_async_next_token_can_include_scores_before_eval(
                     is_eos=False,
                     advanced=True,
                     token_bytes=b"A",
+                    decoded_text="A",
                     token_logprob=-0.25,
                     top_logprobs=(
                         pyds4.TokenScore(token_id=101, logprob=-0.25),
@@ -1261,6 +1264,31 @@ def test_async_next_token_skips_scores_for_stop_eos(
     assert "session.token_logprob:6" not in recording_engine.events
     assert "session.top_logprobs" not in recording_engine.events
     assert "session.eval" not in recording_engine.events
+
+
+def test_async_next_token_decoded_text_replaces_invalid_utf8(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_token = 101
+    recording_engine.token_texts = {101: b"\xff"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                step = await session.next_token(decode=True)
+
+                assert step == pyds4.GenerationStep(
+                    token_id=101,
+                    is_eos=False,
+                    advanced=True,
+                    token_bytes=b"\xff",
+                    decoded_text="\ufffd",
+                )
+
+    asyncio.run(scenario())
 
 
 def test_async_next_token_rejects_sampling_with_exclusion(

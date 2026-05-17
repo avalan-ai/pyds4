@@ -326,9 +326,9 @@ python examples/generate_text_async.py \
   incremental UTF-8 decoding, EOS suppression, and the same
   mutating-cancellation policy as `next_token()`.
 - `AsyncSession.next_token(..., scores=GenerationScoreOptions(...))` returns a
-  `GenerationStep` that can include raw native chosen-token logprob and top-k
-  `TokenScore` values before the generated token is evaluated into the
-  session.
+  `GenerationStep` that can include token bytes, decoded text, raw native
+  chosen-token logprob, and top-k `TokenScore` values before the generated
+  token is evaluated into the session.
 - `pyds4.EngineOptions` configures model path, backend, MTP options, threading,
   steering options, and native startup log replay.
 - `pyds4.SamplingOptions` configures temperature, top-k, top-p, min-p, and
@@ -347,8 +347,10 @@ python examples/generate_text_async.py \
   changing parameter semantics. Tool-call blocks may contain whitespace and
   invoke elements only, and invoke bodies may contain whitespace and
   parameter elements only; stray text in either container is reported as
-  malformed instead of being skipped. These helpers do not import Avalan or
-  native DS4 extension objects.
+  malformed instead of being skipped. Parameter `string` attributes must be
+  omitted, `true`, or `false`; other values are reported as malformed instead
+  of being guessed. These helpers do not import Avalan or native DS4 extension
+  objects.
 - `pyds4.kv_cache` provides import-safe disk KV cache key and metadata helpers
   for DS4 payload bytes. Entries are keyed by model namespace, context size,
   token count, and rendered prompt token IDs; rendered prompt text is stored

@@ -78,8 +78,13 @@ def test_async_real_ds4_generation_smoke() -> None:
                     assert greedy.top_logprobs[0].token_id == greedy_token
                 if greedy.is_eos:
                     assert greedy.token_bytes is None
+                    assert greedy.decoded_text is None
                 else:
                     assert isinstance(greedy.token_bytes, bytes)
+                    assert greedy.decoded_text == greedy.token_bytes.decode(
+                        "utf-8",
+                        errors="replace",
+                    )
                 expected_pos = len(single_turn) + int(greedy.advanced)
                 assert await session.pos == expected_pos
 
@@ -96,8 +101,13 @@ def test_async_real_ds4_generation_smoke() -> None:
                 assert sampled.advanced is not sampled.is_eos
                 if sampled.is_eos:
                     assert sampled.token_bytes is None
+                    assert sampled.decoded_text is None
                 else:
                     assert isinstance(sampled.token_bytes, bytes)
+                    assert sampled.decoded_text == sampled.token_bytes.decode(
+                        "utf-8",
+                        errors="replace",
+                    )
                 expected_pos += int(sampled.advanced)
                 assert await session.pos == expected_pos
 

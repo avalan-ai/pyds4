@@ -605,14 +605,17 @@ class AsyncSession:
                 session.eval(token_id)
 
             token_bytes = None
+            decoded_text = None
             if decode and not (stop_on_eos and is_eos):
                 token_bytes = engine.token_text(token_id)
+                decoded_text = token_bytes.decode("utf-8", errors="replace")
 
             return GenerationStep(
                 token_id=token_id,
                 is_eos=is_eos,
                 advanced=should_advance,
                 token_bytes=token_bytes,
+                decoded_text=decoded_text,
                 token_logprob=token_logprob,
                 top_logprobs=top_logprobs,
             )
