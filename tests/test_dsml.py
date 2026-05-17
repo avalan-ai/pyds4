@@ -386,14 +386,17 @@ def test_parse_generated_dsml_accepts_xml_attribute_quote_variants() -> None:
 def test_parse_generated_dsml_extracts_multiple_invokes_in_order() -> None:
     text = (
         "<tool_calls>"
+        "\n  "
         '<invoke name="math.calculator">'
         '<parameter name="expression" string="true">'
         "first call has a long enough body to catch cursor overshoot"
         "</parameter>"
         "</invoke>"
+        "\n\n"
         '<invoke name="math.sqrt">'
         '<parameter name="value" string="false">16</parameter>'
         "</invoke>"
+        "\n"
         "</tool_calls>"
     )
 
@@ -675,6 +678,34 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "</tool_calls>"
             ),
             "parameter tag is missing a close tag",
+        ),
+        (
+            (
+                "<tool_calls>"
+                "not an invoke"
+                '<invoke name="math.calculator"></invoke>'
+                "</tool_calls>"
+            ),
+            "text outside invoke tags",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator"></invoke>'
+                "not an invoke"
+                '<invoke name="math.sqrt"></invoke>'
+                "</tool_calls>"
+            ),
+            "text outside invoke tags",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator"></invoke>'
+                "not an invoke"
+                "</tool_calls>"
+            ),
+            "text outside invoke tags",
         ),
     ],
 )

@@ -767,7 +767,11 @@ def _parse_calls(block: str) -> tuple[tuple[DsmlToolCall, ...], str | None]:
     while True:
         match = _INVOKE_START_RE.search(block, position)
         if not match:
+            if block[position:].strip():
+                return (), "tool_calls block contains text outside invoke tags"
             return tuple(calls), None
+        if block[position : match.start()].strip():
+            return (), "tool_calls block contains text outside invoke tags"
 
         attrs, attr_error = _parse_attrs("invoke", match.group(1))
         if attr_error is not None:
