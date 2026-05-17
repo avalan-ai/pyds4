@@ -24,6 +24,7 @@ from pyds4.dsml import (
     split_reasoning,
     stream_argument_deltas,
     tool_call_start_span,
+    tool_call_start_suffix_length,
     tool_schema_text,
     tools_prompt,
 )
@@ -426,6 +427,27 @@ def test_parse_generated_dsml_reports_incomplete_blocks() -> None:
         == '\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="math.calculator">'
     )
     assert parsed.error == "missing closing tool_calls tag"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("visible\n\n<｜DSML｜tool", len("\n\n<｜DSML｜tool")),
+        ("visible\n<DSML｜tool_calls", len("\n<DSML｜tool_calls")),
+        ("visible<tool", len("<tool")),
+        ("visible<tool_calls>", len("<tool_calls>")),
+        ("visible only", 0),
+    ],
+)
+def test_tool_call_start_suffix_length_tracks_possible_markers(
+    text: str, expected: int
+) -> None:
+    assert tool_call_start_suffix_length(text) == expected
+
+
+def test_tool_call_start_suffix_length_rejects_non_string() -> None:
+    with pytest.raises(TypeError, match="text must be a string"):
+        tool_call_start_suffix_length(object())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

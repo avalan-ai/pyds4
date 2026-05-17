@@ -32,6 +32,11 @@ TOOL_CALL_START_PREFIXES = (
     "<DSML｜tool_calls",
     "<tool_calls",
 )
+TOOL_CALL_START_MARKERS = tuple(
+    f"{line_prefix}{marker_prefix}>"
+    for marker_prefix in TOOL_CALL_START_PREFIXES
+    for line_prefix in ("\n\n", "\n", "")
+)
 TOOL_CALL_END_MARKERS = (
     "</｜DSML｜tool_calls>",
     "</DSML｜tool_calls>",
@@ -614,6 +619,21 @@ def tool_call_start_span(text: str) -> tuple[int, int] | None:
     _validate_str("text", text)
     match = _TOOL_CALLS_START_RE.search(text)
     return (match.start(), match.end()) if match else None
+
+
+def tool_call_start_suffix_length(text: str) -> int:
+    """Return trailing text length that may become a DSML start marker."""
+    _validate_str("text", text)
+    max_length = min(
+        len(text), max(len(marker) for marker in TOOL_CALL_START_MARKERS)
+    )
+    for length in range(max_length, 0, -1):
+        suffix = text[-length:]
+        if any(
+            marker.startswith(suffix) for marker in TOOL_CALL_START_MARKERS
+        ):
+            return length
+    return 0
 
 
 def stream_argument_deltas(
