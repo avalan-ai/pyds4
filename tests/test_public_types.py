@@ -457,10 +457,12 @@ def test_generation_step_rejects_invalid_values(
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [
+        ({"event": ""}, "event"),
         ({"event": b"prefill_chunk"}, "event"),
         ({"current": True}, "current"),
         ({"current": -1}, "current"),
         ({"current": 2**31}, "current"),
+        ({"current": 3}, "current"),
         ({"total": False}, "total"),
         ({"total": -1}, "total"),
         ({"total": 2**31}, "total"),

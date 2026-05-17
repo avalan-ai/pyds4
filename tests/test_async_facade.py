@@ -580,6 +580,40 @@ def test_async_exports_are_available() -> None:
     assert pyds4.ProgressEvent is pyds4_asyncio.ProgressEvent
 
 
+def test_async_engine_open_failure_stops_worker_and_allows_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sync_engine = _engine_with_state(_ValidatingEngineState())
+
+    def open_sync_engine(_: pyds4.EngineOptions) -> pyds4.Engine:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise pyds4.Ds4LoadError("native open failed")
+        return sync_engine
+
+    monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", open_sync_engine)
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        engine = pyds4_asyncio.AsyncEngine(options)
+
+        with pytest.raises(pyds4.Ds4LoadError, match="native open failed"):
+            await engine._ensure_open()
+        assert engine._engine is None
+        assert engine._worker is None
+        assert engine.closed is False
+
+        await engine._ensure_open()
+        assert await engine.eos_token_id == 6
+        await engine.aclose()
+
+    asyncio.run(scenario())
+
+    assert attempts == 2
+
+
 def test_async_engine_methods_mirror_sync_validation_errors(
     validating_sync_engine: _ValidatingEngineState,
 ) -> None:

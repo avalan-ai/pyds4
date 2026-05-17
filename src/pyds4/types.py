@@ -471,6 +471,8 @@ class ProgressEvent:
 
     def __post_init__(self) -> None:
         _validate_str("event", self.event)
+        if not self.event:
+            raise ValueError("event must not be empty.")
         _validate_int(
             "current",
             self.current,
@@ -483,3 +485,5 @@ class ProgressEvent:
             minimum=0,
             maximum=C_INT_MAX,
         )
+        if self.current > self.total:
+            raise ValueError("current must be <= total.")

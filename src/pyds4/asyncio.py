@@ -365,9 +365,17 @@ class AsyncEngine:
                 raise Ds4LoadError("DS4 async engine is closed.")
             if self._worker is None:
                 self._worker = _OwnerWorker()
-            self._engine = await self._worker.call(
-                lambda: _SyncEngine(self._options)
-            )
+            worker = self._worker
+            try:
+                self._engine = await worker.call(
+                    lambda: _SyncEngine(self._options)
+                )
+            except Exception:
+                self._engine = None
+                if self._worker is worker:
+                    self._worker = None
+                worker.stop()
+                raise
 
     async def _call_engine(
         self,
