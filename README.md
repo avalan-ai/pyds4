@@ -233,7 +233,11 @@ is the recommended helper for plain decoded text because it handles UTF-8
 decoding, stop-string buffering, EOS suppression, and session advancement on
 top of the lower-level `AsyncSession.next_token()` primitive.
 `AsyncSession.generate_text()` returns the same decoded text as a complete
-string for callers that do not need incremental chunks.
+string for callers that do not need incremental chunks. Applications that
+need token-level metadata can keep using `AsyncSession.next_token()` and pass
+`GenerationScoreOptions` to populate the returned `GenerationStep` with the
+chosen token logprob and optional top-k token scores before the session is
+advanced.
 
 ```python
 from __future__ import annotations
@@ -321,6 +325,10 @@ python examples/generate_text_async.py \
   framework-neutral decoded text generation with stop-string buffering,
   incremental UTF-8 decoding, EOS suppression, and the same
   mutating-cancellation policy as `next_token()`.
+- `AsyncSession.next_token(..., scores=GenerationScoreOptions(...))` returns a
+  `GenerationStep` that can include raw native chosen-token logprob and top-k
+  `TokenScore` values before the generated token is evaluated into the
+  session.
 - `pyds4.EngineOptions` configures model path, backend, MTP options, threading,
   steering options, and native startup log replay.
 - `pyds4.SamplingOptions` configures temperature, top-k, top-p, min-p, and

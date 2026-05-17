@@ -63,9 +63,20 @@ def test_async_real_ds4_generation_smoke() -> None:
                 assert isfinite(greedy_logprob)
                 assert abs(greedy_logprob - top_scores[0].logprob) < 1e-5
 
-                greedy = await session.next_token(decode=True)
+                greedy = await session.next_token(
+                    decode=True,
+                    scores=pyds4.GenerationScoreOptions(
+                        mode=pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+                        top_k=3,
+                    ),
+                )
                 assert greedy.token_id == greedy_token
                 assert greedy.advanced is not greedy.is_eos
+                if greedy.token_logprob is not None:
+                    assert isfinite(greedy.token_logprob)
+                    assert abs(greedy.token_logprob - greedy_logprob) < 1e-5
+                    assert greedy.top_logprobs
+                    assert greedy.top_logprobs[0].token_id == greedy_token
                 if greedy.is_eos:
                     assert greedy.token_bytes is None
                 else:

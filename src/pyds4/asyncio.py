@@ -20,11 +20,13 @@ from .native import Session as _SyncSession
 from .types import (
     EngineOptions,
     GenerationOptions,
+    GenerationScoreOptions,
     GenerationStep,
     ProgressEvent,
     SamplingOptions,
     ThinkMode,
     TokenScore,
+    TokenScoreMode,
 )
 
 _T = TypeVar("_T")
@@ -61,6 +63,32 @@ def _validate_generation_options(
             "options must be a GenerationOptions instance or None."
         )
     return options
+
+
+def _validate_generation_score_options(
+    options: GenerationScoreOptions | None,
+) -> GenerationScoreOptions:
+    if options is None:
+        return GenerationScoreOptions()
+    if not isinstance(options, GenerationScoreOptions):
+        raise TypeError(
+            "scores must be a GenerationScoreOptions instance or None."
+        )
+    return options
+
+
+def _requests_token_logprob(options: GenerationScoreOptions) -> bool:
+    return options.mode in {
+        TokenScoreMode.TOKEN_LOGPROB,
+        TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+    }
+
+
+def _requests_top_logprobs(options: GenerationScoreOptions) -> bool:
+    return options.mode in {
+        TokenScoreMode.TOP_LOGPROBS,
+        TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+    }
 
 
 def _find_stop_index(
@@ -538,10 +566,12 @@ class AsyncSession:
         decode: bool = False,
         stop_on_eos: bool = True,
         exclude_token_id: int | None = None,
+        scores: GenerationScoreOptions | None = None,
     ) -> GenerationStep:
         _validate_bool_option("advance", advance)
         _validate_bool_option("decode", decode)
         _validate_bool_option("stop_on_eos", stop_on_eos)
+        score_options = _validate_generation_score_options(scores)
         if options is not None and exclude_token_id is not None:
             raise ValueError(
                 "exclude_token_id cannot be used with sampling options."
@@ -560,6 +590,17 @@ class AsyncSession:
 
             is_eos = token_id == engine.eos_token_id
             should_advance = advance and not (stop_on_eos and is_eos)
+
+            top_logprobs: tuple[TokenScore, ...] = ()
+            token_logprob: float | None = None
+            if not (stop_on_eos and is_eos):
+                if _requests_top_logprobs(score_options):
+                    top_logprobs = tuple(
+                        session.top_logprobs(score_options.top_k)
+                    )
+                if _requests_token_logprob(score_options):
+                    token_logprob = session.token_logprob(token_id)
+
             if should_advance:
                 session.eval(token_id)
 
@@ -572,6 +613,8 @@ class AsyncSession:
                 is_eos=is_eos,
                 advanced=should_advance,
                 token_bytes=token_bytes,
+                token_logprob=token_logprob,
+                top_logprobs=top_logprobs,
             )
 
         try:

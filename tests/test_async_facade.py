@@ -922,6 +922,11 @@ def test_async_session_methods_mirror_sync_validation_errors(
                         exclude_token_id=True,  # type: ignore[arg-type]
                     )
 
+                with pytest.raises(TypeError, match="GenerationScoreOptions"):
+                    await session.next_token(
+                        scores=object(),  # type: ignore[arg-type]
+                    )
+
                 await session.sync([1, 2])
                 assert await session.tokens == [1, 2]
 
@@ -1176,6 +1181,86 @@ def test_async_next_token_stops_before_eos_eval_and_decode(
 
     assert "session.eval" not in recording_engine.events
     assert "engine.token_text:6" not in recording_engine.events
+
+
+def test_async_next_token_can_include_scores_before_eval(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_token = 101
+    recording_engine.token_texts = {101: b"A"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        scores = pyds4.GenerationScoreOptions(
+            mode=pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+            top_k=2,
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                step = await session.next_token(decode=True, scores=scores)
+
+                assert step == pyds4.GenerationStep(
+                    token_id=101,
+                    is_eos=False,
+                    advanced=True,
+                    token_bytes=b"A",
+                    token_logprob=-0.25,
+                    top_logprobs=(
+                        pyds4.TokenScore(token_id=101, logprob=-0.25),
+                        pyds4.TokenScore(token_id=102, logprob=-1.25),
+                    ),
+                )
+                assert await session.tokens == [1, 2, 101]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events == [
+        "engine.open",
+        "engine.create_session:64",
+        "session.sync",
+        "session.argmax",
+        "engine.eos_token_id",
+        "session.top_logprobs:2",
+        "session.token_logprob:101",
+        "session.eval",
+        "engine.token_text:101",
+        "session.tokens",
+        "session.close",
+        "engine.close",
+    ]
+
+
+def test_async_next_token_skips_scores_for_stop_eos(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_token = 6
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        scores = pyds4.GenerationScoreOptions(
+            mode=pyds4.TokenScoreMode.TOKEN_LOGPROB,
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                step = await session.next_token(decode=True, scores=scores)
+
+                assert step == pyds4.GenerationStep(
+                    token_id=6,
+                    is_eos=True,
+                    advanced=False,
+                    token_bytes=None,
+                )
+                assert await session.tokens == [1, 2]
+
+    asyncio.run(scenario())
+
+    assert "session.token_logprob:6" not in recording_engine.events
+    assert "session.top_logprobs" not in recording_engine.events
+    assert "session.eval" not in recording_engine.events
 
 
 def test_async_next_token_rejects_sampling_with_exclusion(
