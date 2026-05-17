@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import html
 import json
 import math
-from collections.abc import Iterable, Mapping
+import re
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias, cast
@@ -20,6 +22,50 @@ JsonObject: TypeAlias = dict[str, JsonValue]
 ToolSchemaInput: TypeAlias = Mapping[str, object] | str
 ToolSchemasInput: TypeAlias = (
     ToolSchemaInput | Iterable[ToolSchemaInput] | None
+)
+ReplayLookup: TypeAlias = Callable[[tuple["DsmlToolCall", ...]], str | None]
+
+TOOL_CALLS_START = "<｜DSML｜tool_calls>"
+TOOL_CALLS_END = "</｜DSML｜tool_calls>"
+TOOL_CALL_START_PREFIXES = (
+    "<｜DSML｜tool_calls",
+    "<DSML｜tool_calls",
+    "<tool_calls",
+)
+TOOL_CALL_END_MARKERS = (
+    "</｜DSML｜tool_calls>",
+    "</DSML｜tool_calls>",
+    "</tool_calls>",
+)
+PARAMETER_END_MARKERS = (
+    "</｜DSML｜parameter>",
+    "</DSML｜parameter>",
+    "</parameter>",
+)
+_ATTR_RE = re.compile(r'([A-Za-z_][\w:-]*)="([^"]*)"')
+_INVOKE_START_RE = re.compile(
+    r"<(?:｜DSML｜|DSML｜)?invoke\b([^>]*)>",
+    re.DOTALL,
+)
+_INVOKE_END_RE = re.compile(
+    r"</(?:｜DSML｜|DSML｜)?invoke>",
+    re.DOTALL,
+)
+_PARAM_START_RE = re.compile(
+    r"<(?:｜DSML｜|DSML｜)?parameter\b[^>]*>",
+    re.DOTALL,
+)
+_PARAM_RE = re.compile(
+    r"<(?:｜DSML｜|DSML｜)?parameter\b([^>]*)>"
+    r"(.*?)"
+    r"</(?:｜DSML｜|DSML｜)?parameter>",
+    re.DOTALL,
+)
+_TOOL_CALLS_START_RE = re.compile(
+    r"\n?\n?<(?:(?:｜DSML｜|DSML｜)tool_calls|tool_calls)>",
+)
+_TOOL_CALLS_END_RE = re.compile(
+    r"</(?:(?:｜DSML｜|DSML｜)tool_calls|tool_calls)>",
 )
 
 
@@ -373,6 +419,376 @@ class DsmlParseResult:
         )
 
 
+def render_prompt(
+    prompt: DsmlPrompt,
+    think_mode: object = None,
+    *,
+    replay_lookup: ReplayLookup | None = None,
+) -> str:
+    """Return a rendered DSML chat prompt including optional tool context."""
+    if not isinstance(prompt, DsmlPrompt):
+        raise TypeError("prompt must be a DsmlPrompt instance.")
+
+    messages = cast(tuple[DsmlMessage, ...], prompt.messages)
+    chat_messages = tuple(
+        message
+        for message in messages
+        if message.role not in {
+            DsmlMessageRole.DEVELOPER,
+            DsmlMessageRole.SYSTEM,
+        }
+    )
+    tool_schemas = prompt.tool_schema_text
+    system_parts = [prompt.system_content] if prompt.system_content else []
+    system_parts.extend(
+        message.content
+        for message in messages
+        if message.role in {DsmlMessageRole.DEVELOPER, DsmlMessageRole.SYSTEM}
+    )
+    if tool_schemas:
+        system_parts.append(_tools_prompt_text(tool_schemas))
+
+    rendered = [
+        "<｜begin▁of▁sentence｜>",
+        "\n\n".join(system_parts),
+    ]
+    pending_assistant = False
+    pending_tool_result = False
+    think = _thinking_enabled(think_mode)
+    tool_context = bool(tool_schemas) or any(
+        message.tool_calls or message.role is DsmlMessageRole.TOOL
+        for message in chat_messages
+    )
+    last_user_index = max(
+        (
+            index
+            for index, message in enumerate(chat_messages)
+            if message.role in {
+                DsmlMessageRole.USER,
+                DsmlMessageRole.TOOL,
+            }
+        ),
+        default=-1,
+    )
+
+    for index, message in enumerate(chat_messages):
+        if message.role is DsmlMessageRole.USER:
+            rendered.extend(("<｜User｜>", message.content))
+            pending_assistant = True
+            pending_tool_result = False
+        elif message.role is DsmlMessageRole.TOOL:
+            if not pending_tool_result:
+                rendered.append("<｜User｜>")
+            rendered.append(render_tool_result(message.content))
+            pending_assistant = True
+            pending_tool_result = True
+        elif message.role is DsmlMessageRole.ASSISTANT:
+            if pending_assistant:
+                rendered.append("<｜Assistant｜>")
+                if think:
+                    if tool_context or index > last_user_index:
+                        rendered.extend(
+                            (
+                                "<think>",
+                                message.reasoning or "",
+                                "</think>",
+                            )
+                        )
+                    else:
+                        rendered.append("</think>")
+                else:
+                    rendered.append("</think>")
+            rendered.append(message.content)
+            rendered.append(
+                render_tool_calls(message.tool_calls, replay_lookup)
+            )
+            rendered.append("<｜end▁of▁sentence｜>")
+            pending_assistant = False
+            pending_tool_result = False
+
+    if pending_assistant:
+        rendered.append("<｜Assistant｜>")
+        rendered.append("<think>" if think else "</think>")
+    return "".join(rendered)
+
+
+def tools_prompt(tool_schemas: ToolSchemasInput) -> str | None:
+    """Return DSML tool-use instructions or ``None`` when no schemas exist."""
+    rendered_schemas = tool_schema_text(tool_schemas)
+    if rendered_schemas is None:
+        return None
+    return _tools_prompt_text(rendered_schemas)
+
+
+def render_tool_calls(
+    calls: Iterable[DsmlToolCall],
+    replay_lookup: ReplayLookup | None = None,
+) -> str:
+    """Return canonical DSML text for assistant tool calls."""
+    normalized_calls = _normalize_tool_calls(calls)
+    if not normalized_calls:
+        return ""
+    if replay_lookup is not None:
+        replay = replay_lookup(normalized_calls)
+        if replay is not None:
+            return replay
+
+    parts = ["\n\n", TOOL_CALLS_START, "\n"]
+    for call in normalized_calls:
+        parts.extend(
+            (
+                '<｜DSML｜invoke name="',
+                _escape_attr(call.name),
+                '">\n',
+            )
+        )
+        arguments = cast(JsonObject, call.arguments)
+        for name, value in arguments.items():
+            parts.append(_render_parameter(str(name), value))
+        parts.append("</｜DSML｜invoke>\n")
+    parts.append(TOOL_CALLS_END)
+    return "".join(parts)
+
+
+def render_tool_result(content: str) -> str:
+    """Return canonical DSML text for a tool result."""
+    _validate_str("content", content)
+    return f"<tool_result>{_escape_text(content)}</tool_result>"
+
+
+def parse_tool_calls(text: str) -> tuple[DsmlToolCall, ...] | None:
+    """Return DSML tool calls parsed from ``text``."""
+    parsed = parse_generated_message(text)
+    if not parsed.calls:
+        return None
+    return cast(tuple[DsmlToolCall, ...], parsed.calls)
+
+
+def parse_generated_message(text: str) -> DsmlParseResult:
+    """Parse generated DSML text into content, calls, and replay metadata."""
+    _validate_str("text", text)
+    start_match = _TOOL_CALLS_START_RE.search(text)
+    if not start_match:
+        content, reasoning = split_reasoning(text)
+        return DsmlParseResult(content=content, reasoning=reasoning)
+
+    content, reasoning = split_reasoning(text[: start_match.start()].rstrip())
+    end_match = _TOOL_CALLS_END_RE.search(text[start_match.end() :])
+    if not end_match:
+        return DsmlParseResult(
+            content=content,
+            reasoning=reasoning,
+            raw_dsml=text[start_match.start() :],
+            status=DsmlParseStatus.INCOMPLETE,
+            error="missing closing tool_calls tag",
+        )
+
+    block_start = start_match.end()
+    block_end = block_start + end_match.start()
+    raw_end = start_match.end() + end_match.end()
+    block = text[block_start:block_end]
+    calls, error = _parse_calls(block)
+    if error is not None:
+        return DsmlParseResult(
+            content=content,
+            reasoning=reasoning,
+            raw_dsml=text[start_match.start() : raw_end],
+            status=DsmlParseStatus.MALFORMED,
+            error=error,
+        )
+    return DsmlParseResult(
+        content=content,
+        calls=calls,
+        reasoning=reasoning,
+        raw_dsml=text[start_match.start() : raw_end],
+    )
+
+
+def tool_call_start_span(text: str) -> tuple[int, int] | None:
+    """Return the first generated DSML tool-call block start span."""
+    _validate_str("text", text)
+    match = _TOOL_CALLS_START_RE.search(text)
+    return (match.start(), match.end()) if match else None
+
+
+def split_reasoning(text: str) -> tuple[str, str | None]:
+    """Return visible content and optional DSML thinking text."""
+    _validate_str("text", text)
+    if text.startswith("<think>") and "</think>" in text:
+        reasoning, content = text.removeprefix("<think>").split("</think>", 1)
+        return content, reasoning
+    return text, None
+
+
+def _tools_prompt_text(tool_schemas: str) -> str:
+    return (
+        "## Tools\n\n"
+        "You have access to a set of tools to help answer the user "
+        "question. You can invoke tools by writing a "
+        '"<｜DSML｜tool_calls>" block like the following:\n\n'
+        "<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="$TOOL_NAME">\n'
+        '<｜DSML｜parameter name="$PARAMETER_NAME" '
+        'string="true|false">$PARAMETER_VALUE'
+        "</｜DSML｜parameter>\n"
+        "...\n"
+        "</｜DSML｜invoke>\n"
+        '<｜DSML｜invoke name="$TOOL_NAME2">\n'
+        "...\n"
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜tool_calls>\n\n"
+        "String parameters should be specified as raw text and set "
+        '`string="true"`. Preserve characters such as `>`, `&`, and '
+        "`&&` exactly; never replace normal string characters with XML "
+        "or HTML entity escapes. Only if a string value itself contains "
+        "the exact closing parameter tag `</｜DSML｜parameter>`, write "
+        "that tag as `&lt;/｜DSML｜parameter>` inside the value. For all "
+        "other types (numbers, booleans, arrays, objects), pass the "
+        'value in JSON format and set `string="false"`.\n\n'
+        "If thinking_mode is enabled (triggered by <think>), you MUST "
+        "output your complete reasoning inside <think>...</think> "
+        "BEFORE any tool calls or final response.\n\n"
+        "Otherwise, output directly after </think> with tool calls or "
+        "final response.\n\n"
+        "### Available Tool Schemas\n\n"
+        f"{tool_schemas}\n\n"
+        "You MUST strictly follow the above defined tool name and "
+        "parameter schemas to invoke tool calls. Use the exact parameter "
+        "names from the schemas."
+    )
+
+
+def _thinking_enabled(think_mode: object) -> bool:
+    value = getattr(think_mode, "value", think_mode)
+    return value in {"high", "max"}
+
+
+def _parse_calls(block: str) -> tuple[tuple[DsmlToolCall, ...], str | None]:
+    calls: list[DsmlToolCall] = []
+    position = 0
+    while True:
+        match = _INVOKE_START_RE.search(block, position)
+        if not match:
+            return tuple(calls), None
+
+        attrs = _parse_attrs(match.group(1))
+        name = attrs.get("name")
+        if not name:
+            return (), "invoke tag is missing a name attribute"
+
+        invoke_end = _INVOKE_END_RE.search(block, match.end())
+        if not invoke_end:
+            return (), f"invoke tag for {name!r} is missing a close tag"
+
+        body_end = match.end() + invoke_end.start()
+        body = block[match.end() : body_end]
+        arguments, error = _parse_parameters(body)
+        if error is not None:
+            return (), error
+
+        try:
+            calls.append(
+                DsmlToolCall(
+                    id=attrs.get("id") or f"dsml_tool_{len(calls) + 1}",
+                    name=html.unescape(name),
+                    arguments=arguments,
+                )
+            )
+        except (TypeError, ValueError) as error:
+            return (), str(error)
+        position = body_end + invoke_end.end()
+
+
+def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
+    arguments: JsonObject = {}
+    cursor = 0
+    while True:
+        start_match = _PARAM_START_RE.search(block, cursor)
+        if not start_match:
+            return arguments, None
+
+        param_match = _PARAM_RE.match(block, start_match.start())
+        if not param_match:
+            return arguments, "parameter tag is missing a close tag"
+
+        attrs = _parse_attrs(param_match.group(1))
+        name = attrs.get("name")
+        if not name:
+            return arguments, "parameter tag is missing a name attribute"
+        parameter_name = html.unescape(name)
+        raw_value = param_match.group(2)
+        value: JsonValue
+        if attrs.get("string") == "false":
+            try:
+                value = _normalize_json_value(
+                    f"parameter {parameter_name}",
+                    json.loads(raw_value),
+                )
+            except (json.JSONDecodeError, TypeError, ValueError) as error:
+                return (
+                    arguments,
+                    f"parameter {parameter_name!r} contains malformed JSON: "
+                    f"{error}",
+                )
+        else:
+            value = html.unescape(raw_value)
+        arguments[parameter_name] = value
+        cursor = param_match.end()
+
+
+def _parse_attrs(text: str) -> dict[str, str]:
+    return {
+        name: html.unescape(value)
+        for name, value in _ATTR_RE.findall(text)
+    }
+
+
+def _render_parameter(name: str, value: JsonValue) -> str:
+    is_string = isinstance(value, str)
+    rendered_value = (
+        _escape_parameter_text(cast(str, value))
+        if is_string
+        else _escape_json_literal(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=False,
+            )
+        )
+    )
+    return (
+        f'<｜DSML｜parameter name="{_escape_attr(name)}" '
+        f'string="{"true" if is_string else "false"}">'
+        f"{rendered_value}</｜DSML｜parameter>\n"
+    )
+
+
+def _escape_attr(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _escape_text(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _escape_parameter_text(value: str) -> str:
+    return value.replace("</｜DSML｜parameter>", "&lt;/｜DSML｜parameter>")
+
+
+def _escape_json_literal(value: str) -> str:
+    return value.replace("</｜DSML｜parameter>", "\\u003c/｜DSML｜parameter>")
+
+
 __all__ = [
     "DsmlMessage",
     "DsmlMessageRole",
@@ -383,8 +799,22 @@ __all__ = [
     "DsmlToolSchema",
     "JsonObject",
     "JsonValue",
+    "PARAMETER_END_MARKERS",
+    "ReplayLookup",
+    "TOOL_CALLS_END",
+    "TOOL_CALLS_START",
+    "TOOL_CALL_END_MARKERS",
+    "TOOL_CALL_START_PREFIXES",
     "ToolSchemaInput",
     "ToolSchemasInput",
     "normalize_tool_schemas",
+    "parse_generated_message",
+    "parse_tool_calls",
+    "render_prompt",
+    "render_tool_calls",
+    "render_tool_result",
+    "split_reasoning",
+    "tool_call_start_span",
     "tool_schema_text",
+    "tools_prompt",
 ]

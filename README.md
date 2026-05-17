@@ -329,9 +329,10 @@ python examples/generate_text_async.py \
   `pyds4.TokenScoreMode` describe framework-neutral generation limits, stop
   strings, EOS handling, decoding, and optional token score details. They do
   not depend on Avalan response or tool objects.
-- `pyds4.dsml` provides import-safe, framework-neutral DSML data classes for
-  prompt messages, tool calls, parse results, and tool schema normalization.
-  These helpers do not import Avalan or native DS4 extension objects.
+- `pyds4.dsml` provides import-safe, framework-neutral DSML data classes plus
+  DS4 tool prompt rendering, canonical assistant tool-call rendering, tool
+  result rendering, and generated DSML parsing. These helpers do not import
+  Avalan or native DS4 extension objects.
 - `Session.eval_speculative_argmax()` and
   `AsyncSession.eval_speculative_argmax()` expose DS4's greedy MTP speculative
   step when the engine was opened with an MTP model and draft depth greater

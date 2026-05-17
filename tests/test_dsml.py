@@ -15,7 +15,15 @@ from pyds4.dsml import (
     DsmlToolCall,
     DsmlToolSchema,
     normalize_tool_schemas,
+    parse_generated_message,
+    parse_tool_calls,
+    render_prompt,
+    render_tool_calls,
+    render_tool_result,
+    split_reasoning,
+    tool_call_start_span,
     tool_schema_text,
+    tools_prompt,
 )
 
 
@@ -109,6 +117,266 @@ def test_empty_tool_schemas_produce_no_tool_prompt() -> None:
     assert empty_prompt.tool_schemas == ()
     assert empty_prompt.tool_schema_text is None
     assert empty_prompt.has_tool_prompt is False
+
+
+def test_tools_prompt_renders_ds4_instruction_text() -> None:
+    rendered = tools_prompt([_math_schema()])
+
+    assert rendered is not None
+    assert rendered.startswith("## Tools\n\n")
+    assert "<｜DSML｜tool_calls>" in rendered
+    assert '<｜DSML｜invoke name="$TOOL_NAME">' in rendered
+    assert '"name":"math.calculator"' in rendered
+    assert "Preserve characters such as `>`, `&`, and `&&` exactly" in rendered
+    assert tools_prompt(None) is None
+
+
+def test_render_prompt_matches_ds4_chat_and_tool_shape() -> None:
+    prompt = DsmlPrompt(
+        system_content="System",
+        messages=[
+            DsmlMessage(role="developer", content="Developer"),
+            DsmlMessage(role="user", content="hello"),
+            DsmlMessage(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    DsmlToolCall(
+                        id="call_1",
+                        name="math.calculator",
+                        arguments={"expression": "2 + 2", "precision": 2},
+                    )
+                ],
+            ),
+            DsmlMessage(role="tool", content="4 > 3 & < 5"),
+        ],
+        tool_schemas=[_math_schema()],
+    )
+
+    rendered = render_prompt(prompt)
+
+    assert rendered.startswith(
+        "<｜begin▁of▁sentence｜>System\n\nDeveloper\n\n## Tools"
+    )
+    assert "<｜User｜>hello<｜Assistant｜></think>" in rendered
+    assert '<｜DSML｜invoke name="math.calculator">' in rendered
+    assert (
+        '<｜DSML｜parameter name="expression" string="true">2 + 2'
+        "</｜DSML｜parameter>"
+        in rendered
+    )
+    assert (
+        '<｜DSML｜parameter name="precision" string="false">2'
+        "</｜DSML｜parameter>"
+        in rendered
+    )
+    assert "<tool_result>4 &gt; 3 &amp; &lt; 5</tool_result>" in rendered
+
+
+def test_render_prompt_emits_reasoning_for_thinking_mode() -> None:
+    rendered = render_prompt(
+        DsmlPrompt(
+            messages=[
+                DsmlMessage(role="user", content="hello"),
+                DsmlMessage(
+                    role="assistant",
+                    content="answer",
+                    reasoning="think first",
+                ),
+            ],
+        ),
+        think_mode="high",
+    )
+
+    assert "<｜Assistant｜><think>think first</think>answer" in rendered
+
+
+def test_render_tool_calls_uses_replay_when_available() -> None:
+    calls = (
+        DsmlToolCall(name="math.calculator", arguments={"expression": "2"}),
+    )
+
+    assert render_tool_calls(calls, lambda value: "<raw/>") == "<raw/>"
+
+
+def test_render_tool_calls_escapes_only_required_dsml_text() -> None:
+    rendered = render_tool_calls(
+        [
+            DsmlToolCall(
+                name='pkg.tool"&',
+                arguments={
+                    "command": "echo a > b && echo &",
+                    "unsafe": "</｜DSML｜parameter>",
+                    "payload": {"value": "</｜DSML｜parameter>"},
+                },
+            )
+        ]
+    )
+
+    assert '<｜DSML｜invoke name="pkg.tool&quot;&amp;">' in rendered
+    assert "echo a > b && echo &" in rendered
+    assert "&lt;/｜DSML｜parameter>" in rendered
+    assert "\\u003c/｜DSML｜parameter>" in rendered
+
+
+def test_render_tool_result_escapes_xml_text() -> None:
+    assert render_tool_result("1 < 2 && 3 > 2") == (
+        "<tool_result>1 &lt; 2 &amp;&amp; 3 &gt; 2</tool_result>"
+    )
+
+
+def test_parse_generated_dsml_extracts_content_calls_and_raw() -> None:
+    text = (
+        "<think>Need math.</think>I will calculate.\n\n"
+        "<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="math.calculator">\n'
+        '<｜DSML｜parameter name="expression" string="true">'
+        "2 > 1 && echo &"
+        "</｜DSML｜parameter>\n"
+        '<｜DSML｜parameter name="precision" string="false">'
+        "2"
+        "</｜DSML｜parameter>\n"
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜tool_calls> ignored"
+    )
+
+    parsed = parse_generated_message(text)
+
+    assert parsed.status is DsmlParseStatus.COMPLETE
+    assert parsed.content == "I will calculate."
+    assert parsed.reasoning == "Need math."
+    assert parsed.raw_dsml == (
+        "\n\n<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="math.calculator">\n'
+        '<｜DSML｜parameter name="expression" string="true">'
+        "2 > 1 && echo &"
+        "</｜DSML｜parameter>\n"
+        '<｜DSML｜parameter name="precision" string="false">'
+        "2"
+        "</｜DSML｜parameter>\n"
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜tool_calls>"
+    )
+    assert len(parsed.calls) == 1
+    call = parsed.calls[0]
+    assert call.id is not None
+    assert call.name == "math.calculator"
+    assert call.arguments == {
+        "expression": "2 > 1 && echo &",
+        "precision": 2,
+    }
+    assert parse_tool_calls(text) == parsed.calls
+
+
+@pytest.mark.parametrize(
+    ("text", "arguments"),
+    [
+        (
+            "<DSML｜tool_calls>\n"
+            '<DSML｜invoke name="math.calculator">\n'
+            '<DSML｜parameter name="x" string="false">1</DSML｜parameter>\n'
+            "</DSML｜invoke>\n"
+            "</DSML｜tool_calls>",
+            {"x": 1},
+        ),
+        (
+            "<tool_calls>\n"
+            '<invoke name="math.calculator">\n'
+            '<parameter name="x" string="true">1</parameter>\n'
+            "</invoke>\n"
+            "</tool_calls>",
+            {"x": "1"},
+        ),
+    ],
+)
+def test_parse_generated_dsml_accepts_ds4_marker_variants(
+    text: str,
+    arguments: dict[str, object],
+) -> None:
+    parsed = parse_generated_message(text)
+
+    assert parsed.status is DsmlParseStatus.COMPLETE
+    assert parsed.calls[0].name == "math.calculator"
+    assert parsed.calls[0].arguments == arguments
+
+
+def test_parse_generated_dsml_without_tool_calls_returns_content() -> None:
+    parsed = parse_generated_message("<think>hidden</think>visible")
+
+    assert parsed.content == "visible"
+    assert parsed.reasoning == "hidden"
+    assert parsed.calls == ()
+    assert parsed.raw_dsml is None
+    assert parse_tool_calls("plain text") is None
+    assert split_reasoning("plain text") == ("plain text", None)
+
+
+def test_tool_call_start_span_returns_exact_span() -> None:
+    assert tool_call_start_span("hello\n\n<tool_calls>") == (5, 19)
+    assert tool_call_start_span("plain") is None
+
+
+def test_parse_generated_dsml_reports_incomplete_blocks() -> None:
+    parsed = parse_generated_message(
+        "answer\n\n<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="math.calculator">'
+    )
+
+    assert parsed.status is DsmlParseStatus.INCOMPLETE
+    assert parsed.content == "answer"
+    assert parsed.calls == ()
+    assert parsed.raw_dsml == (
+        "\n\n<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="math.calculator">'
+    )
+    assert parsed.error == "missing closing tool_calls tag"
+
+
+@pytest.mark.parametrize(
+    ("text", "error_match"),
+    [
+        (
+            "<｜DSML｜tool_calls>\n"
+            '<｜DSML｜invoke name="math.calculator">\n'
+            "</｜DSML｜tool_calls>",
+            "missing a close tag",
+        ),
+        (
+            "<｜DSML｜tool_calls>\n"
+            '<｜DSML｜invoke name="math.calculator">\n'
+            '<｜DSML｜parameter name="precision" string="false">{bad}'
+            "</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>",
+            "malformed JSON",
+        ),
+        (
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>",
+            "missing a name",
+        ),
+        (
+            "<｜DSML｜tool_calls>\n"
+            '<｜DSML｜invoke name="math.calculator">\n'
+            "<｜DSML｜parameter>2</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>",
+            "parameter tag is missing a name",
+        ),
+    ],
+)
+def test_parse_generated_dsml_reports_malformed_blocks(
+    text: str,
+    error_match: str,
+) -> None:
+    parsed = parse_generated_message(text)
+
+    assert parsed.status is DsmlParseStatus.MALFORMED
+    assert parsed.calls == ()
+    assert parsed.error is not None
+    assert error_match in parsed.error
 
 
 @pytest.mark.parametrize(
