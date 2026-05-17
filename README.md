@@ -334,6 +334,10 @@ python examples/generate_text_async.py \
   result rendering, generated DSML parsing, and incremental argument-delta
   extraction from growing DSML blocks. These helpers do not import Avalan or
   native DS4 extension objects.
+- `pyds4.kv_cache` provides import-safe disk KV cache key and metadata helpers
+  for DS4 payload bytes. Entries are keyed by model namespace, context size,
+  token count, and rendered prompt token IDs; rendered prompt text is stored
+  only as metadata.
 - `Session.eval_speculative_argmax()` and
   `AsyncSession.eval_speculative_argmax()` expose DS4's greedy MTP speculative
   step when the engine was opened with an MTP model and draft depth greater
