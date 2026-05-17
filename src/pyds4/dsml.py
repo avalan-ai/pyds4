@@ -930,6 +930,7 @@ __all__ = [
     "stream_argument_deltas",
     "tool_call_buffer_status",
     "tool_call_start_span",
+    "tool_call_start_suffix_length",
     "tool_schema_text",
     "tools_prompt",
 ]

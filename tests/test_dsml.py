@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import pyds4.dsml as dsml
 from pyds4.dsml import (
     PARAMETER_END_MARKERS,
     DsmlMessage,
@@ -30,6 +31,54 @@ from pyds4.dsml import (
     tool_schema_text,
     tools_prompt,
 )
+
+_DOCUMENTED_DSML_PUBLIC_NAMES = frozenset(
+    (
+        "DsmlMessage",
+        "DsmlMessageRole",
+        "DsmlParseResult",
+        "DsmlParseStatus",
+        "DsmlPrompt",
+        "DsmlToolCall",
+        "DsmlToolCallBufferStatus",
+        "DsmlToolSchema",
+        "JsonObject",
+        "JsonValue",
+        "PARAMETER_END_MARKERS",
+        "ReplayLookup",
+        "TOOL_CALLS_END",
+        "TOOL_CALLS_START",
+        "TOOL_CALL_END_MARKERS",
+        "TOOL_CALL_START_PREFIXES",
+        "ToolSchemaInput",
+        "ToolSchemasInput",
+        "normalize_tool_schemas",
+        "parse_generated_message",
+        "parse_tool_calls",
+        "render_prompt",
+        "render_tool_calls",
+        "render_tool_result",
+        "split_reasoning",
+        "stream_argument_deltas",
+        "tool_call_buffer_status",
+        "tool_call_start_span",
+        "tool_call_start_suffix_length",
+        "tool_schema_text",
+        "tools_prompt",
+    )
+)
+
+
+def test_documented_dsml_public_names_are_exported() -> None:
+    exported_names = set(dsml.__all__)
+
+    assert sorted(_DOCUMENTED_DSML_PUBLIC_NAMES - exported_names) == []
+    assert sorted(exported_names - _DOCUMENTED_DSML_PUBLIC_NAMES) == []
+    assert [
+        name
+        for name in sorted(_DOCUMENTED_DSML_PUBLIC_NAMES)
+        if not hasattr(dsml, name)
+    ] == []
 
 
 def _math_schema() -> dict[str, object]:
