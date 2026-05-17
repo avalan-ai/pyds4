@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -595,9 +596,8 @@ def test_kv_cache_disk_write_failure_is_non_fatal_by_default(
 
 
 def test_kv_cache_import_does_not_import_native_extension_objects() -> None:
-    env = {
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-    }
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     completed = subprocess.run(
         [
             sys.executable,

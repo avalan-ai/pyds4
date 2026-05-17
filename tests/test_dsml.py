@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -938,9 +939,8 @@ def test_dsml_parse_result_rejects_invalid_inputs() -> None:
 
 
 def test_dsml_import_does_not_import_native_extension_objects() -> None:
-    env = {
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-    }
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     completed = subprocess.run(
         [
             sys.executable,
