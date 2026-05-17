@@ -215,8 +215,19 @@ jobs:
       - name: Check distributions
         run: make dist-check DIST_DIR=dist
 
+      - name: Prepare PyPI distributions
+        run: |
+          mkdir -p pypi-dist
+          cp dist/*.tar.gz pypi-dist/
+          cp dist/*macosx*.whl pypi-dist/
+
+      - name: Check PyPI distributions
+        run: make dist-check DIST_DIR=pypi-dist
+
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pypi-dist
 
       - name: Configure git identity
         run: |
@@ -238,4 +249,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.validate.outputs.version }}
-        run: gh release create "v$VERSION" --generate-notes --title "v$VERSION"
+        run: gh release create "v$VERSION" dist/* --generate-notes --title "v$VERSION"

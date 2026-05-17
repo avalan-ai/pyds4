@@ -44,8 +44,9 @@ DS4_SOURCE_DIR=/path/to/ds4 PYDS4_BACKEND=metal \
 
 Run the `Release` workflow manually with the version to publish. The workflow
 checks that `pyproject.toml` already contains that version, builds the sdist
-and backend wheels for Python 3.11 and 3.12, publishes through PyPI trusted
-publishing, tags the commit, and creates a GitHub release.
+and backend wheels for Python 3.11 and 3.12, publishes PyPI-compatible
+distributions through PyPI trusted publishing, tags the commit, and creates a
+GitHub release with all built distributions attached.
 
 The workflow builds:
 
@@ -56,12 +57,12 @@ The `cuda_arch` workflow input is passed to `CMAKE_CUDA_ARCHITECTURES` through
 `CUDA_ARCH`; the default is `90`.
 
 CUDA wheels are audited with `auditwheel show`, but they intentionally keep
-CUDA runtime and cuBLAS libraries external and are uploaded as `linux_x86_64`
-wheels. A local `auditwheel repair` test bundles those NVIDIA libraries and
-currently produces an approximately 377 MB wheel, above PyPI's default 100 MB
-per-file limit. Strict manylinux CUDA wheels need either a PyPI file-size limit
-increase or a packaging change that depends on external NVIDIA CUDA wheels and
-sets a matching runtime library path.
+CUDA runtime and cuBLAS libraries external and are built as `linux_x86_64`
+wheels. PyPI rejects that platform tag, so the workflow attaches CUDA wheels to
+the GitHub release and publishes only the sdist and macOS wheels to PyPI.
+Strict manylinux CUDA wheels need either a PyPI file-size limit increase or a
+packaging change that depends on external NVIDIA CUDA wheels and sets a
+matching runtime library path.
 
 ## Subsequent versions
 
