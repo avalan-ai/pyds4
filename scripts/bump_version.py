@@ -13,6 +13,7 @@ VERSION_PATTERN = re.compile(
 
 FILES_WITH_VERSION = (
     Path("pyproject.toml"),
+    Path("src/pyds4/_native.cpp"),
     Path("tests/test_kv_cache.py"),
     Path("tests/test_metadata.py"),
 )

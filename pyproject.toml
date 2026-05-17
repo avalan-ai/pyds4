@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pyds4"
-version = "1.0.0"
+version = "1.0.1"
 description = "Python bindings for the DS4 native inference engine"
 readme = "README.md"
 requires-python = ">=3.11"
