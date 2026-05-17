@@ -1,5 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(DEFINED SKBUILD_PROJECT_VERSION AND NOT "${SKBUILD_PROJECT_VERSION}" STREQUAL "")
+  set(PYDS4_VERSION "${SKBUILD_PROJECT_VERSION}")
+else()
+  file(READ "${CMAKE_CURRENT_LIST_DIR}/pyproject.toml" PYDS4_PYPROJECT_TOML)
+  string(REGEX MATCH "\nversion = \"([^\"]+)\"" _ "${PYDS4_PYPROJECT_TOML}")
+  set(PYDS4_VERSION "${CMAKE_MATCH_1}")
+endif()
+
+if("${PYDS4_VERSION}" STREQUAL "")
+  message(FATAL_ERROR "Could not determine pyds4 version.")
+endif()
+
 project(pyds4 LANGUAGES C CXX)
 
 option(PYDS4_BUILD_PYTHON_EXTENSION "Build the pyds4 Python extension" ON)
@@ -188,6 +200,12 @@ option(PYDS4_REQUIRE_DS4_SOURCE
 option(PYDS4_USE_FAKE_DS4
        "Build against the deterministic test fake DS4 C shim" OFF)
 
+if(DEFINED ENV{PYDS4_REQUIRE_DS4_SOURCE}
+   AND NOT "$ENV{PYDS4_REQUIRE_DS4_SOURCE}" STREQUAL "")
+  set(PYDS4_REQUIRE_DS4_SOURCE "$ENV{PYDS4_REQUIRE_DS4_SOURCE}" CACHE BOOL
+      "Require DS4_SOURCE_DIR during this metadata-only bootstrap build" FORCE)
+endif()
+
 if(DEFINED ENV{PYDS4_USE_FAKE_DS4}
    AND NOT "$ENV{PYDS4_USE_FAKE_DS4}" STREQUAL "")
   set(PYDS4_USE_FAKE_DS4 "$ENV{PYDS4_USE_FAKE_DS4}" CACHE BOOL
@@ -343,7 +361,7 @@ if(PYDS4_BUILD_PYTHON_EXTENSION)
   target_compile_definitions(
     _native
     PRIVATE
-      PYDS4_VERSION="0.1.0"
+      PYDS4_VERSION="${PYDS4_VERSION}"
       PYDS4_DS4_COMMIT="${PYDS4_EXPECTED_DS4_SOURCE_REF}"
       PYDS4_NATIVE_BACKEND="${PYDS4_BACKEND_NORMALIZED}"
       PYDS4_THINK_MAX_MIN_CONTEXT=${PYDS4_THINK_MAX_MIN_CONTEXT}

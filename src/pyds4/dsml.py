@@ -855,7 +855,7 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
                     ),
                 )
         else:
-            value = html.unescape(raw_value)
+            value = _unescape_parameter_text(raw_value)
         if parameter_name in arguments:
             return (
                 arguments,
@@ -957,11 +957,42 @@ def _escape_text(value: str) -> str:
 
 
 def _escape_parameter_text(value: str) -> str:
-    return value.replace("</｜DSML｜parameter>", "&lt;/｜DSML｜parameter>")
+    for marker in PARAMETER_END_MARKERS:
+        value = value.replace(
+            _escaped_parameter_end_marker(marker),
+            _protected_escaped_parameter_end_marker(marker),
+        )
+    for marker in PARAMETER_END_MARKERS:
+        value = value.replace(marker, _escaped_parameter_end_marker(marker))
+    return value
 
 
 def _escape_json_literal(value: str) -> str:
-    return value.replace("</｜DSML｜parameter>", "\\u003c/｜DSML｜parameter>")
+    for marker in PARAMETER_END_MARKERS:
+        value = value.replace(
+            marker,
+            f"\\u003c{marker[1:]}",
+        )
+    return value
+
+
+def _unescape_parameter_text(value: str) -> str:
+    for marker in PARAMETER_END_MARKERS:
+        value = value.replace(_escaped_parameter_end_marker(marker), marker)
+    for marker in PARAMETER_END_MARKERS:
+        value = value.replace(
+            _protected_escaped_parameter_end_marker(marker),
+            _escaped_parameter_end_marker(marker),
+        )
+    return value
+
+
+def _escaped_parameter_end_marker(marker: str) -> str:
+    return f"&lt;{marker[1:]}"
+
+
+def _protected_escaped_parameter_end_marker(marker: str) -> str:
+    return f"&amp;lt;{marker[1:]}"
 
 
 __all__ = [

@@ -255,14 +255,20 @@ def test_render_tool_calls_uses_replay_when_available() -> None:
 
 
 def test_render_tool_calls_escapes_only_required_dsml_text() -> None:
+    close_markers = " | ".join(PARAMETER_END_MARKERS)
+    literal_entities = "literal &lt;tag&gt; &amp; value &lt;/parameter>"
     rendered = render_tool_calls(
         [
             DsmlToolCall(
                 name='pkg.tool"&',
                 arguments={
                     "command": "echo a > b && echo &",
-                    "unsafe": "</｜DSML｜parameter>",
-                    "payload": {"value": "</｜DSML｜parameter>"},
+                    "unsafe": close_markers,
+                    "literal": literal_entities,
+                    "payload": {
+                        "value": "</｜DSML｜parameter>",
+                        "variants": list(PARAMETER_END_MARKERS),
+                    },
                 },
             )
         ]
@@ -270,8 +276,26 @@ def test_render_tool_calls_escapes_only_required_dsml_text() -> None:
 
     assert '<｜DSML｜invoke name="pkg.tool&quot;&amp;">' in rendered
     assert "echo a > b && echo &" in rendered
-    assert "&lt;/｜DSML｜parameter>" in rendered
-    assert "\\u003c/｜DSML｜parameter>" in rendered
+    assert rendered.count("</｜DSML｜parameter>") == 4
+    assert "</DSML｜parameter>" not in rendered
+    assert "</parameter>" not in rendered
+    for marker in PARAMETER_END_MARKERS:
+        assert f"&lt;{marker[1:]}" in rendered
+        assert f"\\u003c{marker[1:]}" in rendered
+    assert "&amp;lt;/parameter>" in rendered
+
+    parsed = parse_generated_message(rendered)
+
+    assert parsed.status is DsmlParseStatus.COMPLETE
+    assert parsed.calls[0].arguments == {
+        "command": "echo a > b && echo &",
+        "unsafe": close_markers,
+        "literal": literal_entities,
+        "payload": {
+            "value": "</｜DSML｜parameter>",
+            "variants": list(PARAMETER_END_MARKERS),
+        },
+    }
 
 
 def test_render_tool_result_escapes_xml_text() -> None:

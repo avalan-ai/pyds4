@@ -31,6 +31,7 @@ inference, but `pyds4` is usable directly from any Python application.
 - [Build From Source](#build-from-source)
 - [Benchmark](#benchmark)
 - [Test](#test)
+- [Release](#release)
 
 ## Install
 
@@ -422,3 +423,29 @@ SMOKE_MODEL=/path/to/ds4/ds4flash.gguf \
 SMOKE_CTX=4096 \
 make wheel-smoke
 ```
+
+## Release
+
+`pyproject.toml` is the version source. For a new release, bump it and commit:
+
+```sh
+make version VERSION=0.1.1
+```
+
+Build and publish one backend wheel plus the sdist:
+
+```sh
+DS4_SOURCE_DIR=/path/to/ds4 PYDS4_BACKEND=metal make release
+```
+
+Use `PYDS4_BACKEND=cuda` on a CUDA Linux build host to produce the NVIDIA
+wheel. Metal and CUDA wheels can be uploaded for the same `pyds4` version
+because they have different platform tags. The GitHub `Release` workflow
+builds the sdist, macOS arm64 Metal wheels, and Linux x86_64 CUDA wheels.
+The `cuda_arch` workflow input controls the NVIDIA architecture passed to
+CMake.
+
+The CUDA wheel is audited in the release workflow but keeps CUDA runtime and
+cuBLAS libraries external, so it is published as a `linux_x86_64` wheel. A
+strict `auditwheel repair` currently bundles those NVIDIA libraries and
+creates an artifact too large for PyPI's default file limit.

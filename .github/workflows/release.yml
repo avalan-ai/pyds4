@@ -1,0 +1,240 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, for example 0.1.0.
+        required: true
+        type: string
+      cuda_arch:
+        description: CUDA architectures for NVIDIA wheels, passed to CMAKE_CUDA_ARCHITECTURES.
+        required: false
+        default: "90"
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DS4_SOURCE_REF: 8809b90a1e3247389d7652b565ab6772e036f1ea
+
+jobs:
+  validate:
+    name: Validate release input
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate version
+        id: version
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?", version) is None:
+              raise SystemExit(f"Invalid version {version!r}.")
+
+          pyproject_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          if pyproject_version != version:
+              raise SystemExit(
+                  f"pyproject.toml is at {pyproject_version}, not {version}. "
+                  "Run `make version VERSION=...`, merge that bump, then rerun this workflow."
+              )
+          PY
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  sdist:
+    name: Build sdist
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install release tools
+        run: |
+          python -m pip install --upgrade pip
+          make release-tools
+
+      - name: Build sdist
+        run: make release-sdist DIST_DIR=dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyds4-sdist
+          path: dist/*
+          if-no-files-found: error
+
+  macos-metal-wheels:
+    name: Build macOS arm64 Metal wheel / Python ${{ matrix.python-version }}
+    needs: validate
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install release tools
+        run: |
+          python -m pip install --upgrade pip
+          make release-tools
+
+      - name: Check out pinned DS4 source
+        run: |
+          git clone https://github.com/antirez/ds4.git .local/ds4
+          git -C .local/ds4 checkout "$DS4_SOURCE_REF"
+
+      - name: Build Metal wheel
+        env:
+          DS4_SOURCE_DIR: ${{ github.workspace }}/.local/ds4
+          PYDS4_BACKEND: metal
+        run: make release-wheel DIST_DIR=dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyds4-macos-metal-py${{ matrix.python-version }}
+          path: dist/*
+          if-no-files-found: error
+
+  linux-cuda-wheels:
+    name: Build Linux x86_64 CUDA wheel / Python ${{ matrix.python-version }}
+    needs: validate
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.6.3-devel-rockylinux8
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          dnf install -y git gzip make tar
+          dnf clean all
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install release tools
+        run: |
+          python -m pip install --upgrade pip
+          make release-tools
+
+      - name: Check out pinned DS4 source
+        run: |
+          git clone https://github.com/antirez/ds4.git .local/ds4
+          git -C .local/ds4 checkout "$DS4_SOURCE_REF"
+
+      - name: Build CUDA wheel
+        env:
+          DS4_SOURCE_DIR: ${{ github.workspace }}/.local/ds4
+          PYDS4_BACKEND: cuda
+          CUDA_ARCH: ${{ github.event.inputs.cuda_arch }}
+        run: make release-wheel DIST_DIR=dist
+
+      - name: Audit CUDA wheel
+        run: make audit-wheel DIST_DIR=dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyds4-linux-cuda-py${{ matrix.python-version }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs:
+      - validate
+      - sdist
+      - macos-metal-wheels
+      - linux-cuda-wheels
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Install release tools
+        run: |
+          python -m pip install --upgrade pip
+          make release-tools
+
+      - name: Check distributions
+        run: make dist-check DIST_DIR=dist
+
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Configure git identity
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists."
+            exit 1
+          fi
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: gh release create "v$VERSION" --generate-notes --title "v$VERSION"
