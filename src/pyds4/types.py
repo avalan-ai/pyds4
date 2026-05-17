@@ -8,6 +8,8 @@ from numbers import Real
 
 from ._metadata import C_INT_MAX
 
+_UINT64_MAX = (1 << 64) - 1
+
 
 class Backend(StrEnum):
     """Name the native DS4 execution backend."""
@@ -215,7 +217,12 @@ class SamplingOptions:
         _validate_int("top_k", self.top_k, minimum=0, maximum=C_INT_MAX)
         _validate_real("top_p", self.top_p, minimum=0.0, maximum=1.0)
         _validate_real("min_p", self.min_p, minimum=0.0, maximum=1.0)
-        _validate_optional_int("seed", self.seed)
+        _validate_optional_int(
+            "seed",
+            self.seed,
+            minimum=0,
+            maximum=_UINT64_MAX,
+        )
 
 
 @dataclass(frozen=True, slots=True)

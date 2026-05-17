@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 from dataclasses import replace
@@ -224,6 +225,14 @@ def test_kv_cache_corrupt_metadata_is_ignored(tmp_path: Path) -> None:
     )
     assert cache.read_metadata(entry) is None
 
+    unsafe_key_metadata = cache.metadata_for([1], 16).to_json_dict()
+    unsafe_key_metadata["key"] = "../escape"
+    entry.metadata_path.write_text(
+        json.dumps(unsafe_key_metadata),
+        encoding="utf-8",
+    )
+    assert cache.read_metadata(entry) is None
+
 
 def test_kv_cache_mismatched_metadata_invalidates_entry(
     tmp_path: Path,
@@ -262,6 +271,23 @@ def test_kv_cache_metadata_rejects_invalid_payload_file() -> None:
             token_count=1,
             token_sha256="sha",
             payload_file="../entry.payload",
+        )
+
+
+@pytest.mark.parametrize("key", ["../escape", "nested/key", r"nested\key"])
+def test_kv_cache_metadata_rejects_path_like_keys(key: str) -> None:
+    with pytest.raises(ValueError, match="key"):
+        Ds4KvCacheMetadata(
+            version=DS4_KV_CACHE_VERSION,
+            key=key,
+            model_namespace="model-a",
+            pyds4_version="0.1.0",
+            ds4_commit="commit",
+            backend="metal",
+            ctx_size=4096,
+            token_count=1,
+            token_sha256="sha",
+            payload_file="entry.payload",
         )
 
 

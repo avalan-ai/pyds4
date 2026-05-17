@@ -74,6 +74,7 @@ _BACKEND_UNAVAILABLE_ERROR_MARKERS = (
 _DS4_GGUF_MAGIC = b"GGUF"
 _DS4_MIN_GGUF_HEADER_BYTES = 32
 _DS4_SUPPORTED_GGUF_VERSION = 3
+_UINT64_MAX = (1 << 64) - 1
 
 
 class _CapturedNativeStderr:
@@ -357,6 +358,10 @@ def _validate_sampling_options(
         isinstance(seed, bool) or not isinstance(seed, int)
     ):
         raise TypeError("seed must be an integer or None.")
+    if seed is not None and seed < 0:
+        raise ValueError("seed must be >= 0.")
+    if seed is not None and seed > _UINT64_MAX:
+        raise ValueError(f"seed must be <= {_UINT64_MAX}.")
     return temperature, top_k, top_p, min_p, seed
 
 

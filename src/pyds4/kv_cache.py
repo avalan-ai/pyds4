@@ -6,7 +6,7 @@ import json
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from time import time
 from typing import Any
 
@@ -26,6 +26,17 @@ def _validate_nonempty_str(name: str, value: str) -> str:
     value = _validate_str(name, value)
     if not value:
         raise ValueError(f"{name} must not be empty.")
+    return value
+
+
+def _validate_file_name(name: str, value: str) -> str:
+    value = _validate_nonempty_str(name, value)
+    if (
+        value in {".", ".."}
+        or PurePosixPath(value).name != value
+        or PureWindowsPath(value).name != value
+    ):
+        raise ValueError(f"{name} must be a file name.")
     return value
 
 
@@ -74,10 +85,11 @@ def _validate_float(
 
 
 def _validate_payload_file(value: str) -> str:
-    value = _validate_nonempty_str("payload_file", value)
-    if Path(value).name != value:
-        raise ValueError("payload_file must be a file name.")
-    return value
+    return _validate_file_name("payload_file", value)
+
+
+def _validate_cache_key(value: str) -> str:
+    return _validate_file_name("key", value)
 
 
 def _validate_optional_size_budget(
@@ -195,7 +207,7 @@ class Ds4KvCacheEntry:
     token_sha256: str
 
     def __post_init__(self) -> None:
-        _validate_nonempty_str("key", self.key)
+        object.__setattr__(self, "key", _validate_cache_key(self.key))
         object.__setattr__(self, "metadata_path", Path(self.metadata_path))
         object.__setattr__(self, "payload_path", Path(self.payload_path))
         _validate_nonempty_str("token_sha256", self.token_sha256)
@@ -285,7 +297,7 @@ class Ds4KvCacheMetadata:
 
     def __post_init__(self) -> None:
         _validate_int("version", self.version, minimum=1)
-        _validate_nonempty_str("key", self.key)
+        object.__setattr__(self, "key", _validate_cache_key(self.key))
         _validate_nonempty_str("model_namespace", self.model_namespace)
         _validate_nonempty_str("pyds4_version", self.pyds4_version)
         _validate_nonempty_str("ds4_commit", self.ds4_commit)

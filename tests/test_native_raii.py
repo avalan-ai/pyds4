@@ -973,6 +973,32 @@ def test_sample_rejects_invalid_options_before_native_call() -> None:
     engine.close()
 
 
+@pytest.mark.parametrize("seed", [-1, 2**64])
+def test_native_session_sample_rejects_invalid_seed_range(seed: int) -> None:
+    engine_state = _native.EngineState(
+        "model.gguf",
+        "cpu",
+        None,
+        0,
+        0,
+        0.0,
+        None,
+        0.0,
+        0.0,
+        False,
+        False,
+    )
+    session_state = engine_state.create_session(64)
+
+    with pytest.raises(ValueError, match="seed"):
+        session_state.sample(0.7, 0, 1.0, 0.0, seed)
+
+    assert counters()["sample_calls"] == 0
+
+    session_state.close()
+    engine_state.close()
+
+
 def test_session_create_failure_maps_to_context_error_with_ctx_size() -> None:
     engine = make_engine(model_path="ctx-fail-model.gguf")
 

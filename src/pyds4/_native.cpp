@@ -271,7 +271,7 @@ uint64_t py_seed(py::handle value) {
         throw py::type_error("seed must be an integer or None.");
     }
 
-    const unsigned long long seed = PyLong_AsUnsignedLongLongMask(value.ptr());
+    const unsigned long long seed = PyLong_AsUnsignedLongLong(value.ptr());
     if (PyErr_Occurred()) {
         PyErr_Clear();
         throw py::value_error("seed is outside the supported integer range.");
