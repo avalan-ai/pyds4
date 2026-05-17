@@ -345,9 +345,10 @@ python examples/generate_text_async.py \
   and the documented plain XML fallback, including XML-style quoted
   attributes, while rejecting malformed attribute syntax instead of silently
   changing parameter semantics. Tool-call blocks may contain whitespace and
-  invoke elements only; stray text inside a block is reported as malformed
-  instead of being skipped. These helpers do not import Avalan or native DS4
-  extension objects.
+  invoke elements only, and invoke bodies may contain whitespace and
+  parameter elements only; stray text in either container is reported as
+  malformed instead of being skipped. These helpers do not import Avalan or
+  native DS4 extension objects.
 - `pyds4.kv_cache` provides import-safe disk KV cache key and metadata helpers
   for DS4 payload bytes. Entries are keyed by model namespace, context size,
   token count, and rendered prompt token IDs; rendered prompt text is stored

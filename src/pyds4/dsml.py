@@ -809,7 +809,17 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
     while True:
         start_match = _PARAM_START_RE.search(block, cursor)
         if not start_match:
+            if block[cursor:].strip():
+                return (
+                    arguments,
+                    "invoke body contains text outside parameter tags",
+                )
             return arguments, None
+        if block[cursor : start_match.start()].strip():
+            return (
+                arguments,
+                "invoke body contains text outside parameter tags",
+            )
 
         param_match = _PARAM_RE.match(block, start_match.start())
         if not param_match:

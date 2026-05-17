@@ -365,9 +365,11 @@ def test_parse_generated_dsml_accepts_ds4_marker_variants(
 def test_parse_generated_dsml_accepts_xml_attribute_quote_variants() -> None:
     text = (
         "<tool_calls>"
-        "<invoke name = 'math.calculator' id = 'call_1'>"
+        "<invoke name = 'math.calculator' id = 'call_1'>\n  "
         "<parameter name = 'expression' string = 'true'>2 + 2</parameter>"
+        "\n\n"
         '<parameter name="precision" string = \'false\'>2</parameter>'
+        "\n"
         "</invoke>"
         "</tool_calls>"
     )
@@ -706,6 +708,43 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
                 "</tool_calls>"
             ),
             "text outside invoke tags",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                "not a parameter"
+                '<parameter name="expression" string="true">2 + 2'
+                "</parameter>"
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "text outside parameter tags",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="expression" string="true">2 + 2'
+                "</parameter>"
+                "not a parameter"
+                '<parameter name="precision" string="false">2</parameter>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "text outside parameter tags",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
+                '<parameter name="expression" string="true">2 + 2'
+                "</parameter>"
+                "not a parameter"
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "text outside parameter tags",
         ),
     ],
 )
