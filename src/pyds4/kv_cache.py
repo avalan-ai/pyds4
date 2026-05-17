@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import time
 from typing import Any
@@ -32,6 +32,12 @@ def _validate_optional_str(name: str, value: str | None) -> str | None:
     if value is None:
         return None
     return _validate_str(name, value)
+
+
+def _validate_bool(name: str, value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a boolean.")
+    return value
 
 
 def _validate_int(
@@ -70,6 +76,20 @@ def _validate_payload_file(value: str) -> str:
     value = _validate_nonempty_str("payload_file", value)
     if Path(value).name != value:
         raise ValueError("payload_file must be a file name.")
+    return value
+
+
+def _validate_optional_size_budget(
+    value: int | None,
+) -> int | None:
+    if value is None:
+        return None
+    return _validate_int("size_budget_bytes", value, minimum=0)
+
+
+def _validate_bytes(name: str, value: object) -> bytes:
+    if not isinstance(value, bytes):
+        raise TypeError(f"{name} must be bytes.")
     return value
 
 
@@ -130,6 +150,20 @@ def _key_digest(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _method(target: object, name: str) -> Any:
+    method = getattr(target, name, None)
+    if not callable(method):
+        raise TypeError(f"session must provide a callable {name}() method.")
+    return method
+
+
+def _error_text(error: BaseException) -> str:
+    message = str(error)
+    if message:
+        return message
+    return type(error).__name__
+
+
 @dataclass(frozen=True, slots=True)
 class Ds4KvCacheEntry:
     """Describe the deterministic file locations for one cache key."""
@@ -144,6 +178,68 @@ class Ds4KvCacheEntry:
         object.__setattr__(self, "metadata_path", Path(self.metadata_path))
         object.__setattr__(self, "payload_path", Path(self.payload_path))
         _validate_nonempty_str("token_sha256", self.token_sha256)
+
+
+@dataclass(frozen=True, slots=True)
+class Ds4KvCacheRestoreResult:
+    """Describe a cache restore attempt for one prompt prefix."""
+
+    status: str
+    entry: Ds4KvCacheEntry
+    metadata: "Ds4KvCacheMetadata | None" = None
+    restored: bool = False
+    synced: bool = False
+    error: str | None = None
+    warning: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_nonempty_str("status", self.status)
+        if not isinstance(self.entry, Ds4KvCacheEntry):
+            raise TypeError("entry must be a Ds4KvCacheEntry instance.")
+        if self.metadata is not None and not isinstance(
+            self.metadata,
+            Ds4KvCacheMetadata,
+        ):
+            raise TypeError(
+                "metadata must be a Ds4KvCacheMetadata instance or None."
+            )
+        _validate_bool("restored", self.restored)
+        _validate_bool("synced", self.synced)
+        _validate_optional_str("error", self.error)
+        _validate_optional_str("warning", self.warning)
+
+
+@dataclass(frozen=True, slots=True)
+class Ds4KvCacheStoreResult:
+    """Describe a cache store attempt for one prompt prefix."""
+
+    status: str
+    entry: Ds4KvCacheEntry
+    metadata: "Ds4KvCacheMetadata | None" = None
+    stored: bool = False
+    evicted_entries: tuple[Ds4KvCacheEntry, ...] = ()
+    error: str | None = None
+    warning: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_nonempty_str("status", self.status)
+        if not isinstance(self.entry, Ds4KvCacheEntry):
+            raise TypeError("entry must be a Ds4KvCacheEntry instance.")
+        if self.metadata is not None and not isinstance(
+            self.metadata,
+            Ds4KvCacheMetadata,
+        ):
+            raise TypeError(
+                "metadata must be a Ds4KvCacheMetadata instance or None."
+            )
+        _validate_bool("stored", self.stored)
+        for entry in self.evicted_entries:
+            if not isinstance(entry, Ds4KvCacheEntry):
+                raise TypeError(
+                    "evicted_entries items must be Ds4KvCacheEntry objects."
+                )
+        _validate_optional_str("error", self.error)
+        _validate_optional_str("warning", self.warning)
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +518,268 @@ class Ds4DiskKvCache:
         )
         return path
 
+    def restore(
+        self,
+        session: object,
+        prompt_tokens: Iterable[int],
+        ctx_size: int,
+        *,
+        enabled: bool = True,
+        sync_on_miss: bool = True,
+    ) -> Ds4KvCacheRestoreResult:
+        """Restore a session payload or synchronize live tokens on a miss."""
+        _validate_bool("enabled", enabled)
+        _validate_bool("sync_on_miss", sync_on_miss)
+        tokens = _normalize_token_ids(prompt_tokens)
+        ctx = _validate_int("ctx_size", ctx_size, minimum=1, maximum=C_INT_MAX)
+        entry = self._entry_for_tokens(tokens, ctx)
+
+        if not enabled:
+            synced = self._sync_on_miss(session, tokens, sync_on_miss)
+            return Ds4KvCacheRestoreResult(
+                status="disabled",
+                entry=entry,
+                synced=synced,
+            )
+
+        metadata = self.read_metadata(entry)
+        miss_error: str | None = None
+        if metadata is not None and self.metadata_matches(
+            metadata,
+            tokens,
+            ctx,
+        ):
+            payload_path = self._directory / metadata.payload_file
+            try:
+                payload = payload_path.read_bytes()
+                if len(payload) != metadata.payload_size:
+                    raise ValueError(
+                        "cache payload size does not match metadata."
+                    )
+                _method(session, "load_payload")(payload)
+            except Exception as error:
+                miss_error = _error_text(error)
+            else:
+                restored_metadata = replace(
+                    metadata,
+                    hit_count=metadata.hit_count + 1,
+                    accessed_at=time(),
+                    payload_size=len(payload),
+                )
+                warning = self._try_write_metadata(restored_metadata)
+                return Ds4KvCacheRestoreResult(
+                    status="hit",
+                    entry=entry,
+                    metadata=restored_metadata,
+                    restored=True,
+                    warning=warning,
+                )
+        elif metadata is not None:
+            miss_error = "cache metadata does not match request."
+
+        synced = self._sync_on_miss(session, tokens, sync_on_miss)
+        return Ds4KvCacheRestoreResult(
+            status="miss",
+            entry=entry,
+            metadata=metadata,
+            synced=synced,
+            error=miss_error,
+        )
+
+    def store(
+        self,
+        session: object,
+        prompt_tokens: Iterable[int],
+        ctx_size: int,
+        *,
+        rendered_prompt: str | None = None,
+        enabled: bool = True,
+        size_budget_bytes: int | None = None,
+        raise_on_error: bool = False,
+    ) -> Ds4KvCacheStoreResult:
+        """Save a session payload and metadata, returning write failures."""
+        _validate_optional_str("rendered_prompt", rendered_prompt)
+        _validate_bool("enabled", enabled)
+        budget = _validate_optional_size_budget(size_budget_bytes)
+        _validate_bool("raise_on_error", raise_on_error)
+        tokens = _normalize_token_ids(prompt_tokens)
+        ctx = _validate_int("ctx_size", ctx_size, minimum=1, maximum=C_INT_MAX)
+        entry = self._entry_for_tokens(tokens, ctx)
+
+        if not enabled:
+            return Ds4KvCacheStoreResult(status="disabled", entry=entry)
+
+        try:
+            payload = _validate_bytes(
+                "save_payload result",
+                _method(session, "save_payload")(),
+            )
+            existing = self.read_metadata(entry)
+            now = time()
+            created_at = now
+            hit_count = 0
+            if existing is not None and self.metadata_matches(
+                existing,
+                tokens,
+                ctx,
+            ):
+                created_at = existing.created_at
+                hit_count = existing.hit_count
+
+            metadata = self.metadata_for(
+                tokens,
+                ctx,
+                rendered_prompt=rendered_prompt,
+                payload_size=len(payload),
+                created_at=created_at,
+                accessed_at=now,
+                hit_count=hit_count,
+            )
+            self._write_payload_and_metadata(entry, metadata, payload)
+            evicted_entries = (
+                self.evict(budget) if budget is not None else ()
+            )
+            return Ds4KvCacheStoreResult(
+                status="stored",
+                entry=entry,
+                metadata=metadata,
+                stored=True,
+                evicted_entries=evicted_entries,
+            )
+        except Exception as error:
+            if raise_on_error:
+                raise
+            return Ds4KvCacheStoreResult(
+                status="error",
+                entry=entry,
+                error=_error_text(error),
+            )
+
+    def evict(self, size_budget_bytes: int) -> tuple[Ds4KvCacheEntry, ...]:
+        """Evict least-useful entries until payload bytes fit the budget."""
+        budget = _validate_int(
+            "size_budget_bytes",
+            size_budget_bytes,
+            minimum=0,
+        )
+        if not self._directory.exists():
+            return ()
+
+        candidates: list[tuple[Ds4KvCacheMetadata, Ds4KvCacheEntry, int]] = []
+        for metadata_path in self._directory.glob("*.json"):
+            metadata = self.read_metadata(metadata_path)
+            if metadata is None or not self._metadata_belongs_to_cache(
+                metadata
+            ):
+                continue
+            payload_path = self._directory / metadata.payload_file
+            try:
+                payload_size = payload_path.stat().st_size
+            except OSError:
+                continue
+            candidates.append(
+                (
+                    metadata,
+                    Ds4KvCacheEntry(
+                        key=metadata.key,
+                        metadata_path=metadata_path,
+                        payload_path=payload_path,
+                        token_sha256=metadata.token_sha256,
+                    ),
+                    payload_size,
+                )
+            )
+
+        total_size = sum(payload_size for _, _, payload_size in candidates)
+        if total_size <= budget:
+            return ()
+
+        evicted: list[Ds4KvCacheEntry] = []
+        candidates.sort(
+            key=lambda item: (
+                item[0].hit_count,
+                item[0].accessed_at,
+                item[0].created_at,
+                item[0].key,
+            )
+        )
+        for _, entry, payload_size in candidates:
+            if total_size <= budget:
+                break
+            self._remove_entry_files(entry)
+            total_size -= payload_size
+            evicted.append(entry)
+        return tuple(evicted)
+
+    def _metadata_belongs_to_cache(
+        self,
+        metadata: Ds4KvCacheMetadata,
+    ) -> bool:
+        return (
+            metadata.version == self._cache_version
+            and metadata.model_namespace == self._model_namespace
+            and metadata.pyds4_version == self._pyds4_version
+            and metadata.ds4_commit == self._ds4_commit
+            and metadata.backend == self._backend
+        )
+
+    def _sync_on_miss(
+        self,
+        session: object,
+        prompt_tokens: tuple[int, ...],
+        enabled: bool,
+    ) -> bool:
+        if not enabled:
+            return False
+        _method(session, "sync")(list(prompt_tokens))
+        return True
+
+    def _try_write_metadata(
+        self,
+        metadata: Ds4KvCacheMetadata,
+    ) -> str | None:
+        try:
+            self.write_metadata(metadata)
+        except OSError as error:
+            return _error_text(error)
+        return None
+
+    def _write_payload_and_metadata(
+        self,
+        entry: Ds4KvCacheEntry,
+        metadata: Ds4KvCacheMetadata,
+        payload: bytes,
+    ) -> None:
+        self._directory.mkdir(parents=True, exist_ok=True)
+        payload_tmp_path = entry.payload_path.with_name(
+            f"{entry.payload_path.name}.tmp"
+        )
+        metadata_tmp_path = entry.metadata_path.with_name(
+            f"{entry.metadata_path.name}.tmp"
+        )
+        try:
+            payload_tmp_path.write_bytes(payload)
+            metadata_tmp_path.write_text(
+                json.dumps(metadata.to_json_dict(), sort_keys=True),
+                encoding="utf-8",
+            )
+            payload_tmp_path.replace(entry.payload_path)
+            metadata_tmp_path.replace(entry.metadata_path)
+        finally:
+            for path in (payload_tmp_path, metadata_tmp_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
+    def _remove_entry_files(entry: Ds4KvCacheEntry) -> None:
+        for path in (entry.payload_path, entry.metadata_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
 
 def _metadata_str(metadata: Mapping[str, object], key: str) -> str:
     value = metadata.get(key)
@@ -449,4 +807,6 @@ __all__ = [
     "Ds4DiskKvCache",
     "Ds4KvCacheEntry",
     "Ds4KvCacheMetadata",
+    "Ds4KvCacheRestoreResult",
+    "Ds4KvCacheStoreResult",
 ]

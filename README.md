@@ -337,7 +337,11 @@ python examples/generate_text_async.py \
 - `pyds4.kv_cache` provides import-safe disk KV cache key and metadata helpers
   for DS4 payload bytes. Entries are keyed by model namespace, context size,
   token count, and rendered prompt token IDs; rendered prompt text is stored
-  only as metadata.
+  only as metadata. `Ds4DiskKvCache.restore()` loads cached payload bytes into
+  any session with `load_payload()` and falls back to `sync()` on misses or
+  corrupt entries; `store()` persists `save_payload()` bytes and metadata with
+  non-fatal write errors by default; `evict()` applies deterministic budget
+  eviction using hit count, access time, creation time, and key order.
 - `Session.eval_speculative_argmax()` and
   `AsyncSession.eval_speculative_argmax()` expose DS4's greedy MTP speculative
   step when the engine was opened with an MTP model and draft depth greater
