@@ -593,6 +593,13 @@ class AsyncSession:
         generation_options = _validate_generation_options(options)
         return self._stream_text(generation_options)
 
+    async def generate_text(
+        self,
+        options: GenerationOptions | None = None,
+    ) -> str:
+        chunks = [chunk async for chunk in self.stream_text(options)]
+        return "".join(chunks)
+
     async def _stream_text(
         self,
         generation_options: GenerationOptions,
