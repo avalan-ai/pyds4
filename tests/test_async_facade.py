@@ -614,6 +614,68 @@ def test_async_engine_open_failure_stops_worker_and_allows_retry(
     assert attempts == 2
 
 
+def test_async_engine_open_cancellation_stops_worker_and_closes_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    events: list[str] = []
+
+    class SlowOpenEngine:
+        def __init__(self, _: pyds4.EngineOptions) -> None:
+            self.closed = False
+            events.append("engine.open:start")
+            started.set()
+            assert release.wait(timeout=5)
+            events.append("engine.open:end")
+
+        @property
+        def eos_token_id(self) -> int:
+            return 6
+
+        def close(self) -> None:
+            if self.closed:
+                return
+            events.append("engine.close")
+            self.closed = True
+
+    monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", SlowOpenEngine)
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        engine = pyds4_asyncio.AsyncEngine(options)
+        open_task = asyncio.create_task(engine._ensure_open())
+
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+
+        open_task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await open_task
+        assert engine._engine is None
+        assert engine._worker is None
+        assert engine.closed is False
+
+        await engine._ensure_open()
+        assert await engine.eos_token_id == 6
+        await engine.aclose()
+
+    asyncio.run(scenario())
+
+    assert events == [
+        "engine.open:start",
+        "engine.open:end",
+        "engine.close",
+        "engine.open:start",
+        "engine.open:end",
+        "engine.close",
+    ]
+
+
 def test_async_engine_methods_mirror_sync_validation_errors(
     validating_sync_engine: _ValidatingEngineState,
 ) -> None:

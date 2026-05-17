@@ -736,6 +736,17 @@ def test_tool_call_buffer_status_rejects_non_string() -> None:
             (
                 "<tool_calls>"
                 '<invoke name="math.calculator">'
+                '<parameter name="value" string="true">first</parameter>'
+                '<parameter name="value" string="true">second</parameter>'
+                "</invoke>"
+                "</tool_calls>"
+            ),
+            "duplicate name",
+        ),
+        (
+            (
+                "<tool_calls>"
+                '<invoke name="math.calculator">'
                 '<parameter name="expression" string="true">'
                 "first call has a long enough body to catch cursor overshoot"
                 "</parameter>"

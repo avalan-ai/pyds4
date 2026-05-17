@@ -366,11 +366,24 @@ class AsyncEngine:
             if self._worker is None:
                 self._worker = _OwnerWorker()
             worker = self._worker
+            opened_engine: _SyncEngine | None = None
+
+            def open_engine() -> _SyncEngine:
+                nonlocal opened_engine
+
+                opened_engine = _SyncEngine(self._options)
+                return opened_engine
+
+            def close_cancelled_open() -> None:
+                if opened_engine is not None:
+                    opened_engine.close()
+
             try:
                 self._engine = await worker.call(
-                    lambda: _SyncEngine(self._options)
+                    open_engine,
+                    on_cancelled_after_run=close_cancelled_open,
                 )
-            except Exception:
+            except BaseException:
                 self._engine = None
                 if self._worker is worker:
                     self._worker = None

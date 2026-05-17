@@ -856,6 +856,11 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
                 )
         else:
             value = html.unescape(raw_value)
+        if parameter_name in arguments:
+            return (
+                arguments,
+                f"parameter tag contains duplicate name {parameter_name!r}",
+            )
         arguments[parameter_name] = value
         cursor = param_match.end()
 
