@@ -50,7 +50,7 @@ publishing, tags the commit, and creates a GitHub release.
 The workflow builds:
 
 - macOS arm64 Metal wheels on `macos-15`.
-- Linux x86_64 CUDA wheels in `nvidia/cuda:12.6.3-devel-rockylinux8`.
+- Linux x86_64 CUDA wheels in `nvidia/cuda:12.6.3-devel-ubuntu24.04`.
 
 The `cuda_arch` workflow input is passed to `CMAKE_CUDA_ARCHITECTURES` through
 `CUDA_ARCH`; the default is `90`.

@@ -133,7 +133,7 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     container:
-      image: nvidia/cuda:12.6.3-devel-rockylinux8
+      image: nvidia/cuda:12.6.3-devel-ubuntu24.04
     strategy:
       fail-fast: false
       matrix:
@@ -144,8 +144,9 @@ jobs:
     steps:
       - name: Install system dependencies
         run: |
-          dnf install -y git gzip make tar
-          dnf clean all
+          apt-get update
+          apt-get install -y --no-install-recommends git gzip make tar
+          rm -rf /var/lib/apt/lists/*
 
       - uses: actions/checkout@v4
 
