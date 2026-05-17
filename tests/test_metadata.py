@@ -57,7 +57,7 @@ _DOCUMENTED_TOP_LEVEL_PUBLIC_NAMES = frozenset(
 
 
 def test_import_safe_metadata() -> None:
-    assert pyds4.__version__ == "0.1.0"
+    assert pyds4.__version__ == "1.0.0"
     assert pyds4.__ds4_import_safe__ is True
     assert pyds4.__ds4_commit__ == "8809b90a1e3247389d7652b565ab6772e036f1ea"
     assert pyds4.__ds4_api_version__ is None
@@ -344,7 +344,7 @@ def test_import_remains_safe_when_built_native_extension_cannot_load() -> None:
                         return types.ModuleType(spec.name)
 
                     def exec_module(self, module):
-                        module.VERSION = "0.1.0"
+                        module.VERSION = "1.0.0"
                         module.DS4_COMMIT = (
                             "8809b90a1e3247389d7652b565ab6772e036f1ea"
                         )

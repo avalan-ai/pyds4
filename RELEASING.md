@@ -1,7 +1,7 @@
 # Releasing pyds4
 
-The first PyPI release should be `0.1.0`. The package is still marked alpha,
-and that version is already the project metadata version.
+The first PyPI release should be `1.0.0`, and that version should already be
+the project metadata version before running the release workflow.
 
 ## One-time PyPI setup
 
@@ -68,7 +68,7 @@ sets a matching runtime library path.
 1. Update the version:
 
    ```sh
-   make version VERSION=0.1.1
+   make version VERSION=1.0.1
    ```
 
 2. Run the tests you need for the change, commit the version bump, and merge it

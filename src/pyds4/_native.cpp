@@ -28,7 +28,7 @@
 #endif
 
 #ifndef PYDS4_VERSION
-#define PYDS4_VERSION "0.1.0"
+#define PYDS4_VERSION "1.0.0"
 #endif
 
 #ifndef PYDS4_DS4_COMMIT
