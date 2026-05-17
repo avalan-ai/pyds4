@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from types import ModuleType
 
 from ._metadata import DS4_API_VERSION, DS4_COMMIT, REQUIRED_C_SYMBOLS
@@ -46,10 +48,20 @@ def _available_backends_from_native() -> tuple[str, ...]:
     return ()
 
 
+def _source_tree_version() -> str:
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        return "0+unknown"
+    match = re.search(r'(?m)^version = "([^"]+)"$', text)
+    return match.group(1) if match is not None else "0+unknown"
+
+
 __version__ = (
-    getattr(_build_config, "VERSION", "0.1.0")
+    getattr(_build_config, "VERSION", _source_tree_version())
     if _build_config is not None
-    else "0.1.0"
+    else _source_tree_version()
 )
 __ds4_import_safe__ = True
 __ds4_commit__ = _string_from_native("__ds4_commit__", DS4_COMMIT)

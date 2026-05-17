@@ -161,6 +161,19 @@ void test_fake_engine_session_lifecycle() {
     CHECK(sampled <= 1000 + 'z');
     CHECK(rng != 123);
 
+    ds4_token_score scores[3] = {};
+    CHECK(ds4_session_top_logprobs(session, scores, 3) == 3);
+    CHECK(scores[0].id == first_generated_token);
+    CHECK(scores[0].logprob == -0.25F);
+    CHECK(scores[1].id == second_generated_token);
+    CHECK(scores[1].logprob == -1.25F);
+
+    ds4_token_score sampled_score = {};
+    CHECK(ds4_session_token_logprob(session, first_generated_token,
+                                    &sampled_score) == 1);
+    CHECK(sampled_score.id == first_generated_token);
+    CHECK(sampled_score.logprob == -0.25F);
+
     char error[128] = {};
     CHECK(ds4_session_eval(session, sampled, error, sizeof(error)) == 0);
     CHECK(ds4_session_pos(session) == 3);
@@ -169,6 +182,40 @@ void test_fake_engine_session_lifecycle() {
     CHECK(ds4_session_pos(session) == 2);
     CHECK(token_values(ds4_session_tokens(session)) ==
           std::vector<int>({1, 2}));
+
+    int accepted[4] = {};
+    CHECK(ds4_session_eval_speculative_argmax(
+              session, first_generated_token, 3, ds4_token_eos(engine),
+              accepted, 4, error, sizeof(error)) == 3);
+    CHECK(std::vector<int>(accepted, accepted + 3) ==
+          std::vector<int>(
+              {first_generated_token, second_generated_token, 1000 + 'C'}));
+    CHECK(ds4_session_pos(session) == 5);
+    CHECK(token_values(ds4_session_tokens(session)) ==
+          std::vector<int>({1, 2, first_generated_token,
+                            second_generated_token, 1000 + 'C'}));
+
+    ds4_session_rewind(session, 2);
+    CHECK(ds4_session_pos(session) == 2);
+
+    const uint64_t payload_bytes = ds4_session_payload_bytes(session);
+    CHECK(payload_bytes > 0);
+
+    ds4_session_snapshot snapshot = {};
+    CHECK(ds4_session_save_snapshot(session, &snapshot, error,
+                                    sizeof(error)) == 0);
+    CHECK(snapshot.ptr != nullptr);
+    CHECK(snapshot.len == payload_bytes);
+
+    CHECK(ds4_session_eval(session, first_generated_token, error,
+                           sizeof(error)) == 0);
+    CHECK(ds4_session_pos(session) == 3);
+    CHECK(ds4_session_load_snapshot(session, &snapshot, error,
+                                    sizeof(error)) == 0);
+    CHECK(ds4_session_pos(session) == 2);
+    CHECK(token_values(ds4_session_tokens(session)) ==
+          std::vector<int>({1, 2}));
+    ds4_session_snapshot_free(&snapshot);
 
     ds4_session_invalidate(session);
     CHECK(ds4_session_pos(session) == 0);
@@ -183,10 +230,14 @@ void test_fake_engine_session_lifecycle() {
     CHECK(counters.session_create_calls == 1);
     CHECK(counters.session_free_calls == 1);
     CHECK(counters.sync_calls == 1);
-    CHECK(counters.eval_calls == 1);
-    CHECK(counters.rewind_calls == 1);
+    CHECK(counters.eval_calls == 2);
+    CHECK(counters.top_logprobs_calls == 1);
+    CHECK(counters.token_logprob_calls == 1);
+    CHECK(counters.speculative_eval_calls == 1);
+    CHECK(counters.rewind_calls == 2);
     CHECK(counters.invalidate_calls == 1);
     CHECK(counters.token_live_allocations == 0);
+    CHECK(counters.snapshot_live_allocations == 0);
 }
 
 void test_fake_tokenization_and_chat_helpers() {

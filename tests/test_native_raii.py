@@ -20,6 +20,7 @@ def reset_fake_counters() -> Iterator[None]:
     yield
     gc.collect()
     assert counters()["token_live_allocations"] == 0
+    assert counters()["snapshot_live_allocations"] == 0
 
 
 def counters() -> dict[str, int]:
@@ -38,6 +39,23 @@ def make_engine(**kwargs: object) -> pyds4.Engine:
 
 def text_tokens(text: str) -> list[int]:
     return [1000 + ord(char) for char in text]
+
+
+def test_fake_native_capabilities_match_bound_runtime_surface() -> None:
+    caps = pyds4.capabilities()
+
+    assert caps.backend == "cpu"
+    assert caps.available_backends == ("cpu",)
+    assert caps.required_symbols == tuple(pyds4.REQUIRED_C_SYMBOLS)
+    assert caps.progress is True
+    assert caps.mtp is True
+    assert caps.snapshots is True
+    assert caps.payloads is True
+    assert caps.logprobs is True
+    assert caps.top_logprobs is True
+    assert caps.speculative_eval is True
+    assert counters()["engine_open_calls"] == 0
+    assert counters()["session_create_calls"] == 0
 
 
 def test_engine_and_session_close_are_idempotent() -> None:
@@ -334,6 +352,235 @@ def test_sample_preserves_rng_state_until_sync_resets_stream() -> None:
     engine.close()
 
 
+def test_top_logprobs_return_stable_sorted_token_scores() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1, 2])
+
+    scores = session.top_logprobs(3)
+
+    assert scores == [
+        pyds4.TokenScore(token_id=1000 + ord("A"), logprob=-0.25),
+        pyds4.TokenScore(token_id=1000 + ord("B"), logprob=-1.25),
+        pyds4.TokenScore(token_id=1000 + ord("C"), logprob=-2.25),
+    ]
+    assert counters()["top_logprobs_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+def test_token_logprob_can_be_requested_before_eval() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1, 2])
+
+    token_id = session.argmax()
+    assert token_id == 1000 + ord("A")
+    assert session.token_logprob(token_id) == -0.25
+    assert session.pos == 2
+
+    session.eval(token_id)
+    assert session.pos == 3
+    assert counters()["token_logprob_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+def test_speculative_eval_argmax_advances_expected_tokens() -> None:
+    engine = make_engine(mtp_path="mtp.gguf", mtp_draft_tokens=4)
+    session = engine.create_session(64)
+    session.sync([1, 2])
+
+    accepted = session.eval_speculative_argmax(
+        1000 + ord("A"),
+        3,
+        engine.eos_token_id,
+    )
+
+    assert accepted == [
+        1000 + ord("A"),
+        1000 + ord("B"),
+        1000 + ord("C"),
+    ]
+    assert session.tokens == [1, 2, *accepted]
+    counts = counters()
+    assert counts["speculative_eval_calls"] == 1
+    assert counts["eval_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_speculative_eval_argmax_requires_mtp_draft_tokens() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises(
+        pyds4.Ds4GenerationError,
+        match="requires an engine opened with MTP draft tokens > 1",
+    ):
+        session.eval_speculative_argmax(
+            1000 + ord("A"),
+            2,
+            engine.eos_token_id,
+        )
+
+    assert counters()["speculative_eval_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize(
+    ("first_token", "max_tokens", "eos_token_id"),
+    [
+        (True, 2, 6),
+        (-1, 2, 6),
+        (1000 + ord("A"), False, 6),
+        (1000 + ord("A"), 0, 6),
+        (1000 + ord("A"), 2, True),
+        (1000 + ord("A"), 2, -1),
+    ],
+)
+def test_speculative_eval_argmax_rejects_invalid_inputs_before_native_call(
+    first_token: object,
+    max_tokens: object,
+    eos_token_id: object,
+) -> None:
+    engine = make_engine(mtp_path="mtp.gguf", mtp_draft_tokens=4)
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises((TypeError, ValueError)):
+        session.eval_speculative_argmax(  # type: ignore[arg-type]
+            first_token,
+            max_tokens,
+            eos_token_id,
+        )
+
+    assert counters()["speculative_eval_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_speculative_eval_argmax_native_failure_maps_to_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = make_engine(mtp_path="mtp.gguf", mtp_draft_tokens=4)
+    session = engine.create_session(64)
+    session.sync([1])
+    monkeypatch.setenv("PYDS4_FAKE_FAIL_EVAL_SPECULATIVE_ARGMAX", "1")
+
+    with pytest.raises(
+        pyds4.Ds4GenerationError,
+        match="eval_speculative_argmax failed: fake speculative eval failure",
+    ):
+        session.eval_speculative_argmax(
+            1000 + ord("A"),
+            2,
+            engine.eos_token_id,
+        )
+
+    assert counters()["speculative_eval_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("k", [False, -1, 1.5])
+def test_top_logprobs_rejects_invalid_k_before_native_call(
+    k: object,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises((TypeError, ValueError)):
+        session.top_logprobs(k)  # type: ignore[arg-type]
+
+    assert counters()["top_logprobs_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("token_id", [True, -1, 1.5])
+def test_token_logprob_rejects_invalid_token_ids_before_native_call(
+    token_id: object,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+
+    with pytest.raises((TypeError, ValueError)):
+        session.token_logprob(token_id)  # type: ignore[arg-type]
+
+    assert counters()["token_logprob_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("method_name", ["top_logprobs", "token_logprob"])
+def test_logprob_methods_require_ready_logits(method_name: str) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+
+    with pytest.raises(
+        pyds4.Ds4GenerationError,
+        match="no synchronized prompt or evaluated token",
+    ):
+        if method_name == "top_logprobs":
+            session.top_logprobs(1)
+        else:
+            session.token_logprob(1000 + ord("A"))
+
+    counts = counters()
+    assert counts["top_logprobs_calls"] == 0
+    assert counts["token_logprob_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_malformed_top_logprobs_raise_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+    monkeypatch.setenv("PYDS4_FAKE_MALFORMED_TOP_LOGPROBS", "1")
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="malformed"):
+        session.top_logprobs(1)
+
+    assert counters()["top_logprobs_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
+def test_malformed_token_logprob_raises_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+    monkeypatch.setenv("PYDS4_FAKE_MALFORMED_TOKEN_LOGPROB", "1")
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="malformed"):
+        session.token_logprob(1000 + ord("A"))
+
+    assert counters()["token_logprob_calls"] == 1
+
+    session.close()
+    engine.close()
+
+
 def test_greedy_sample_does_not_start_seeded_rng_stream() -> None:
     engine = make_engine()
     expected_session = engine.create_session(64)
@@ -470,6 +717,178 @@ def test_rewind_and_invalidate_update_native_session_state() -> None:
     engine.close()
 
 
+def test_snapshot_save_load_restores_position_and_tokens() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1, 2])
+    session.eval(1000 + ord("A"))
+
+    snapshot = session.save_snapshot()
+    assert isinstance(snapshot, bytes)
+    assert snapshot
+
+    session.eval(1000 + ord("B"))
+    assert session.tokens == [1, 2, 1000 + ord("A"), 1000 + ord("B")]
+
+    session.load_snapshot(snapshot)
+
+    assert session.pos == 3
+    assert session.tokens == [1, 2, 1000 + ord("A")]
+    assert session.argmax() == 1000 + ord("A")
+
+    counts = counters()
+    assert counts["save_snapshot_calls"] == 1
+    assert counts["load_snapshot_calls"] == 1
+    assert counts["snapshot_allocation_calls"] == 1
+    assert counts["snapshot_free_calls"] == 1
+    assert counts["snapshot_live_allocations"] == 0
+
+    session.close()
+    engine.close()
+
+
+def test_payload_save_load_restores_prompt_synchronized_session() -> None:
+    engine = make_engine()
+    source = engine.create_session(64)
+    target = engine.create_session(64)
+    source.sync([1, 2, 3])
+
+    payload = source.save_payload()
+    assert isinstance(payload, bytes)
+    assert payload
+
+    target.sync([9])
+    target.load_payload(payload)
+
+    assert target.pos == 3
+    assert target.tokens == [1, 2, 3]
+    assert target.argmax() == 1000 + ord("A")
+
+    counts = counters()
+    assert counts["payload_bytes_calls"] == 1
+    assert counts["save_payload_calls"] == 1
+    assert counts["load_payload_calls"] == 1
+
+    source.close()
+    target.close()
+    engine.close()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "bad_value", "error_match"),
+    [
+        ("load_snapshot", bytearray(b"snapshot"), "snapshot must be bytes"),
+        ("load_payload", "payload", "payload must be bytes"),
+    ],
+)
+def test_snapshot_and_payload_load_reject_non_bytes_before_native_call(
+    method_name: str,
+    bad_value: object,
+    error_match: str,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+
+    with pytest.raises(TypeError, match=error_match):
+        getattr(session, method_name)(bad_value)
+
+    counts = counters()
+    assert counts["load_snapshot_calls"] == 0
+    assert counts["load_payload_calls"] == 0
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "bad_value", "error_match"),
+    [
+        ("load_snapshot", b"not a snapshot", "load_snapshot failed"),
+        ("load_payload", b"not a payload", "load_payload failed"),
+    ],
+)
+def test_corrupt_snapshot_and_payload_raise_generation_errors(
+    method_name: str,
+    bad_value: bytes,
+    error_match: str,
+) -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+
+    with pytest.raises(pyds4.Ds4GenerationError, match=error_match):
+        getattr(session, method_name)(bad_value)
+
+    session.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("method_name", ["load_snapshot", "load_payload"])
+def test_snapshot_and_payload_from_wrong_context_are_rejected(
+    method_name: str,
+) -> None:
+    engine = make_engine()
+    source = engine.create_session(64)
+    target = engine.create_session(32)
+    source.sync([1, 2])
+    data = (
+        source.save_snapshot()
+        if method_name == "load_snapshot"
+        else source.save_payload()
+    )
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="context"):
+        getattr(target, method_name)(data)
+
+    source.close()
+    target.close()
+    engine.close()
+
+
+@pytest.mark.parametrize("method_name", ["load_snapshot", "load_payload"])
+def test_snapshot_and_payload_from_wrong_model_are_rejected(
+    method_name: str,
+) -> None:
+    source_engine = make_engine(model_path="source.gguf")
+    target_engine = make_engine(model_path="target.gguf")
+    source = source_engine.create_session(64)
+    target = target_engine.create_session(64)
+    source.sync([1, 2])
+    data = (
+        source.save_snapshot()
+        if method_name == "load_snapshot"
+        else source.save_payload()
+    )
+
+    with pytest.raises(pyds4.Ds4GenerationError, match="model"):
+        getattr(target, method_name)(data)
+
+    source.close()
+    target.close()
+    source_engine.close()
+    target_engine.close()
+
+
+def test_snapshot_and_payload_calls_after_close_raise_context_error() -> None:
+    engine = make_engine()
+    session = engine.create_session(64)
+    session.sync([1])
+    snapshot = session.save_snapshot()
+    payload = session.save_payload()
+
+    session.close()
+
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.save_snapshot()
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.load_snapshot(snapshot)
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.save_payload()
+    with pytest.raises(pyds4.Ds4ContextError, match="session is closed"):
+        session.load_payload(payload)
+
+    engine.close()
+
+
 def test_invalidate_can_be_resynchronized_or_reinitialized() -> None:
     engine = make_engine()
     session = engine.create_session(64)
@@ -552,6 +971,32 @@ def test_sample_rejects_invalid_options_before_native_call() -> None:
 
     session.close()
     engine.close()
+
+
+@pytest.mark.parametrize("seed", [-1, 2**64])
+def test_native_session_sample_rejects_invalid_seed_range(seed: int) -> None:
+    engine_state = _native.EngineState(
+        "model.gguf",
+        "cpu",
+        None,
+        0,
+        0,
+        0.0,
+        None,
+        0.0,
+        0.0,
+        False,
+        False,
+    )
+    session_state = engine_state.create_session(64)
+
+    with pytest.raises(ValueError, match="seed"):
+        session_state.sample(0.7, 0, 1.0, 0.0, seed)
+
+    assert counters()["sample_calls"] == 0
+
+    session_state.close()
+    engine_state.close()
 
 
 def test_session_create_failure_maps_to_context_error_with_ctx_size() -> None:

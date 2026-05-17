@@ -11,7 +11,7 @@ version = "0.1.0"
 description = "Python bindings for the DS4 native inference engine"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [
   { name = "Avalan contributors" },
 ]
@@ -25,6 +25,11 @@ classifiers = [
   "Programming Language :: C++",
 ]
 
+[project.urls]
+Homepage = "https://github.com/avalan-ai/pyds4"
+Repository = "https://github.com/avalan-ai/pyds4"
+Issues = "https://github.com/avalan-ai/pyds4/issues"
+
 [project.optional-dependencies]
 test = [
   "pytest>=8",
@@ -36,7 +41,11 @@ dev = [
   "ruff>=0.11.11",
 ]
 release = [
+  "auditwheel>=6.0; sys_platform == 'linux'",
   "build>=1.2",
+  "cmake>=3.20",
+  "ninja>=1.5",
+  "twine>=6.0",
 ]
 
 [tool.scikit-build]
@@ -45,10 +54,12 @@ build-dir = "build/{wheel_tag}"
 
 [tool.scikit-build.sdist]
 include = [
-  "CMakeLists.txt",
-  "Makefile",
-  "README.md",
-  "pyproject.toml",
+  "/CMakeLists.txt",
+  "/LICENSE",
+  "/Makefile",
+  "/README.md",
+  "/RELEASING.md",
+  "/pyproject.toml",
   "scripts/*.py",
   "specs/DS4-BINDING.md",
   "specs/DS4-BINDING-IMPL.md",
@@ -58,8 +69,8 @@ include = [
   "src/pyds4/_native.cpp",
   "tests/fake_ds4/*",
   "tests/native/*.cpp",
-  ".clang-format",
-  ".clang-tidy",
+  "/.clang-format",
+  "/.clang-tidy",
 ]
 exclude = [
   ".local/**",

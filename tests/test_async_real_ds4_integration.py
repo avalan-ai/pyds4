@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from math import isfinite
 
 from _real_ds4_profiles import real_ds4_settings
 
@@ -50,12 +51,40 @@ def test_async_real_ds4_generation_smoke() -> None:
                 assert await session.pos == len(single_turn)
                 assert await session.tokens == single_turn
 
-                greedy = await session.next_token(decode=True)
+                greedy_token = await session.argmax()
+                top_scores = await session.top_logprobs(3)
+                assert top_scores
+                assert all(
+                    isinstance(score, pyds4.TokenScore) for score in top_scores
+                )
+                assert top_scores[0].token_id == greedy_token
+                greedy_logprob = await session.token_logprob(greedy_token)
+                assert isfinite(greedy_logprob)
+                assert abs(greedy_logprob - top_scores[0].logprob) < 1e-5
+
+                greedy = await session.next_token(
+                    decode=True,
+                    scores=pyds4.GenerationScoreOptions(
+                        mode=pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+                        top_k=3,
+                    ),
+                )
+                assert greedy.token_id == greedy_token
                 assert greedy.advanced is not greedy.is_eos
+                if greedy.token_logprob is not None:
+                    assert isfinite(greedy.token_logprob)
+                    assert abs(greedy.token_logprob - greedy_logprob) < 1e-5
+                    assert greedy.top_logprobs
+                    assert greedy.top_logprobs[0].token_id == greedy_token
                 if greedy.is_eos:
                     assert greedy.token_bytes is None
+                    assert greedy.decoded_text is None
                 else:
                     assert isinstance(greedy.token_bytes, bytes)
+                    assert greedy.decoded_text == greedy.token_bytes.decode(
+                        "utf-8",
+                        errors="replace",
+                    )
                 expected_pos = len(single_turn) + int(greedy.advanced)
                 assert await session.pos == expected_pos
 
@@ -72,10 +101,36 @@ def test_async_real_ds4_generation_smoke() -> None:
                 assert sampled.advanced is not sampled.is_eos
                 if sampled.is_eos:
                     assert sampled.token_bytes is None
+                    assert sampled.decoded_text is None
                 else:
                     assert isinstance(sampled.token_bytes, bytes)
+                    assert sampled.decoded_text == sampled.token_bytes.decode(
+                        "utf-8",
+                        errors="replace",
+                    )
                 expected_pos += int(sampled.advanced)
                 assert await session.pos == expected_pos
+
+            async with await engine.create_session(ctx_size) as session:
+                await session.sync(multi_turn)
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(
+                        pyds4.GenerationOptions(max_new_tokens=8)
+                    )
+                ]
+                assert chunks
+                assert "".join(chunks).strip()
+                assert await session.pos > len(multi_turn)
+
+            async with await engine.create_session(ctx_size) as session:
+                await session.sync(multi_turn)
+                generated_text = await session.generate_text(
+                    pyds4.GenerationOptions(max_new_tokens=8)
+                )
+                assert generated_text == "".join(chunks)
+                assert generated_text.strip()
+                assert await session.pos > len(multi_turn)
 
             generated_bytes = [
                 chunk

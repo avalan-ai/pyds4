@@ -22,7 +22,13 @@ from .errors import (
     Ds4InvalidModel,
     Ds4LoadError,
 )
-from .types import EngineOptions, ProgressEvent, SamplingOptions, ThinkMode
+from .types import (
+    EngineOptions,
+    ProgressEvent,
+    SamplingOptions,
+    ThinkMode,
+    TokenScore,
+)
 
 _native: ModuleType | None
 try:
@@ -68,6 +74,7 @@ _BACKEND_UNAVAILABLE_ERROR_MARKERS = (
 _DS4_GGUF_MAGIC = b"GGUF"
 _DS4_MIN_GGUF_HEADER_BYTES = 32
 _DS4_SUPPORTED_GGUF_VERSION = 3
+_UINT64_MAX = (1 << 64) - 1
 
 
 class _CapturedNativeStderr:
@@ -225,8 +232,71 @@ def _validate_bytes_result(operation: str, value: object) -> bytes:
     if isinstance(value, bytes):
         return value
     raise Ds4GenerationError(
-        f"{operation} failed: DS4 returned non-bytes token text."
+        f"{operation} failed: DS4 returned non-bytes result."
     )
+
+
+def _validate_bytes_input(name: str, value: object) -> bytes:
+    if not isinstance(value, bytes):
+        raise TypeError(f"{name} must be bytes.")
+    return value
+
+
+def _validate_logprob_result(operation: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned non-numeric logprob."
+        )
+    result = float(value)
+    if not isfinite(result):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned non-finite logprob."
+        )
+    return result
+
+
+def _validate_token_score(operation: str, value: object) -> TokenScore:
+    token_id: object
+    logprob: object
+    if isinstance(value, TokenScore):
+        token_id = value.token_id
+        logprob = value.logprob
+    elif isinstance(value, dict):
+        token_id = value.get("token_id", value.get("id"))
+        logprob = value.get("logprob")
+    elif isinstance(value, (list, tuple)):
+        if len(value) >= 3:
+            token_id = value[0]
+            logprob = value[2]
+        elif len(value) >= 2:
+            token_id = value[0]
+            logprob = value[1]
+        else:
+            token_id = None
+            logprob = None
+    else:
+        token_id = getattr(value, "token_id", getattr(value, "id", None))
+        logprob = getattr(value, "logprob", None)
+
+    if not _is_token_id(token_id):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned invalid token id."
+        )
+    return TokenScore(
+        token_id=token_id,
+        logprob=_validate_logprob_result(operation, logprob),
+    )
+
+
+def _validate_token_scores_result(
+    operation: str,
+    value: object,
+) -> list[TokenScore]:
+    if not isinstance(value, (list, tuple)):
+        raise Ds4GenerationError(
+            f"{operation} failed: DS4 returned non-list token scores."
+        )
+    return [_validate_token_score(operation, item) for item in value]
 
 
 def _generation_exception(
@@ -288,6 +358,10 @@ def _validate_sampling_options(
         isinstance(seed, bool) or not isinstance(seed, int)
     ):
         raise TypeError("seed must be an integer or None.")
+    if seed is not None and seed < 0:
+        raise ValueError("seed must be >= 0.")
+    if seed is not None and seed > _UINT64_MAX:
+        raise ValueError(f"seed must be <= {_UINT64_MAX}.")
     return temperature, top_k, top_p, min_p, seed
 
 
@@ -830,6 +904,65 @@ class Session:
         except RuntimeError as error:
             raise _generation_exception("sample", error) from error
 
+    def token_logprob(self, token_id: int) -> float:
+        _validate_token_id("token_id", token_id)
+        try:
+            return _validate_logprob_result(
+                "token_logprob",
+                self._require_state().token_logprob(token_id),
+            )
+        except Ds4Error:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("token_logprob", error) from error
+
+    def top_logprobs(self, k: int) -> list[TokenScore]:
+        top_k = _validate_non_negative_int("k", k)
+        try:
+            state = self._require_state()
+            if top_k == 0:
+                return []
+            return _validate_token_scores_result(
+                "top_logprobs",
+                state.top_logprobs(top_k),
+            )
+        except Ds4Error:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("top_logprobs", error) from error
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        _validate_token_id("first_token", first_token)
+        _validate_positive_int("max_tokens", max_tokens)
+        _validate_token_id("eos_token_id", eos_token_id)
+        try:
+            return _validate_token_list(
+                self._require_state().eval_speculative_argmax(
+                    first_token,
+                    max_tokens,
+                    eos_token_id,
+                ),
+                "eval_speculative_argmax",
+            )
+        except Ds4Error:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except RuntimeError as error:
+            raise _generation_exception(
+                "eval_speculative_argmax",
+                error,
+            ) from error
+
     def rewind(self, pos: int) -> None:
         _validate_non_negative_int("pos", pos)
         try:
@@ -840,6 +973,50 @@ class Session:
             raise
         except RuntimeError as error:
             raise _generation_exception("rewind", error) from error
+
+    def save_snapshot(self) -> bytes:
+        try:
+            return _validate_bytes_result(
+                "save_snapshot",
+                self._require_state().save_snapshot(),
+            )
+        except Ds4Error:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("save_snapshot", error) from error
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        snapshot = _validate_bytes_input("snapshot", snapshot)
+        try:
+            self._require_state().load_snapshot(snapshot)
+        except Ds4Error:
+            raise
+        except TypeError:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("load_snapshot", error) from error
+
+    def save_payload(self) -> bytes:
+        try:
+            return _validate_bytes_result(
+                "save_payload",
+                self._require_state().save_payload(),
+            )
+        except Ds4Error:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("save_payload", error) from error
+
+    def load_payload(self, payload: bytes) -> None:
+        payload = _validate_bytes_input("payload", payload)
+        try:
+            self._require_state().load_payload(payload)
+        except Ds4Error:
+            raise
+        except TypeError:
+            raise
+        except RuntimeError as error:
+            raise _generation_exception("load_payload", error) from error
 
     def invalidate(self) -> None:
         try:

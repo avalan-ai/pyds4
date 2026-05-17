@@ -1,7 +1,11 @@
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -67,6 +71,86 @@ struct ProgressEvent {
     int current;
     int total;
 };
+
+struct FileCloser {
+    void operator()(std::FILE* file) const {
+        if (file != nullptr) {
+            std::fclose(file);
+        }
+    }
+};
+
+using FilePtr = std::unique_ptr<std::FILE, FileCloser>;
+
+class NativeSnapshot {
+  public:
+    NativeSnapshot() = default;
+    NativeSnapshot(const NativeSnapshot&) = delete;
+    NativeSnapshot& operator=(const NativeSnapshot&) = delete;
+
+    ~NativeSnapshot() {
+        ds4_session_snapshot_free(&snapshot_);
+    }
+
+    ds4_session_snapshot* get() {
+        return &snapshot_;
+    }
+
+    const ds4_session_snapshot* get() const {
+        return &snapshot_;
+    }
+
+  private:
+    ds4_session_snapshot snapshot_ = {};
+};
+
+FilePtr open_temporary_file(const std::string& operation) {
+    std::FILE* file = std::tmpfile();
+    if (file == nullptr) {
+        throw std::runtime_error(operation +
+                                 " failed: could not open a temporary file.");
+    }
+    return FilePtr(file);
+}
+
+void write_all(std::FILE* file, const char* data, std::size_t size,
+               const std::string& operation) {
+    if (size == 0) {
+        return;
+    }
+    if (std::fwrite(data, 1, size, file) != size) {
+        throw std::runtime_error(operation +
+                                 " failed: could not write temporary data.");
+    }
+}
+
+void rewind_after_write(std::FILE* file, const std::string& operation) {
+    if (std::fflush(file) != 0 || std::fseek(file, 0, SEEK_SET) != 0) {
+        throw std::runtime_error(operation +
+                                 " failed: could not rewind temporary data.");
+    }
+}
+
+std::vector<char> read_payload_bytes(std::FILE* file, uint64_t byte_count,
+                                     const std::string& operation) {
+    if (byte_count >
+        static_cast<uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error(operation +
+                                 " failed: payload is too large to copy.");
+    }
+
+    std::vector<char> data(static_cast<std::size_t>(byte_count));
+    if (!data.empty() &&
+        std::fread(data.data(), 1, data.size(), file) != data.size()) {
+        throw std::runtime_error(operation +
+                                 " failed: could not read temporary data.");
+    }
+    return data;
+}
+
+py::bytes bytes_from_vector(const std::vector<char>& data) {
+    return py::bytes(data.empty() ? "" : data.data(), data.size());
+}
 
 ds4_backend to_native_backend(std::string backend) {
     backend = normalized(std::move(backend));
@@ -156,6 +240,29 @@ int py_non_negative_int(py::handle value, const std::string& name) {
     return static_cast<int>(number);
 }
 
+int py_positive_int(py::handle value, const std::string& name) {
+    if (py::isinstance<py::bool_>(value) || !py::isinstance<py::int_>(value)) {
+        throw py::type_error(name + " must be a positive integer.");
+    }
+
+    int overflow = 0;
+    const long long number =
+        PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        throw py::value_error(name +
+                              " is outside the supported integer range.");
+    }
+    if (overflow != 0 || number > INT_MAX) {
+        throw py::value_error(name +
+                              " is outside the supported integer range.");
+    }
+    if (number <= 0) {
+        throw py::value_error(name + " must be positive.");
+    }
+    return static_cast<int>(number);
+}
+
 uint64_t py_seed(py::handle value) {
     if (value.is_none()) {
         return 0;
@@ -164,7 +271,7 @@ uint64_t py_seed(py::handle value) {
         throw py::type_error("seed must be an integer or None.");
     }
 
-    const unsigned long long seed = PyLong_AsUnsignedLongLongMask(value.ptr());
+    const unsigned long long seed = PyLong_AsUnsignedLongLong(value.ptr());
     if (PyErr_Occurred()) {
         PyErr_Clear();
         throw py::value_error("seed is outside the supported integer range.");
@@ -265,8 +372,9 @@ class EngineState : public std::enable_shared_from_this<EngineState> {
 class SessionState : public std::enable_shared_from_this<SessionState> {
   public:
     SessionState(std::shared_ptr<EngineState> engine_state,
-                 ds4_session* session)
-        : engine_state_(std::move(engine_state)), session_(session) {
+                 ds4_session* session, bool speculative_eval_supported)
+        : engine_state_(std::move(engine_state)), session_(session),
+          speculative_eval_supported_(speculative_eval_supported) {
         ds4_session_set_progress(session_, &SessionState::progress_callback,
                                  this);
     }
@@ -443,6 +551,128 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
         return token;
     }
 
+    double token_logprob(py::handle token_id) {
+        const int token = py_token_id(token_id, "token_id");
+
+        ds4_token_score score = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            ensure_logits_ready("token_logprob");
+            result = ds4_session_token_logprob(session, token, &score);
+        }
+        if (result != 1) {
+            throw std::runtime_error(
+                "token_logprob failed: DS4 returned no token score.");
+        }
+        if (score.id != token || !std::isfinite(score.logprob)) {
+            throw std::runtime_error(
+                "token_logprob failed: DS4 returned malformed token score.");
+        }
+        return static_cast<double>(score.logprob);
+    }
+
+    py::list top_logprobs(py::handle k_value) {
+        const int k = py_non_negative_int(k_value, "k");
+        py::list result;
+        if (k == 0) {
+            return result;
+        }
+
+        std::vector<ds4_token_score> scores(static_cast<std::size_t>(k));
+        int count = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            ensure_logits_ready("top_logprobs");
+            count = ds4_session_top_logprobs(session, scores.data(), k);
+        }
+        if (count <= 0 || count > k) {
+            throw std::runtime_error(
+                "top_logprobs failed: DS4 returned invalid score count.");
+        }
+
+        for (int i = 0; i < count; ++i) {
+            const ds4_token_score& score = scores[static_cast<std::size_t>(i)];
+            if (score.id < 0 || !std::isfinite(score.logprob)) {
+                throw std::runtime_error(
+                    "top_logprobs failed: DS4 returned malformed token "
+                    "score.");
+            }
+            result.append(
+                py::make_tuple(score.id, static_cast<double>(score.logprob)));
+        }
+        return result;
+    }
+
+    py::list eval_speculative_argmax(py::handle first_token_id,
+                                     py::handle max_tokens_value,
+                                     py::handle eos_token_id) {
+        const int first_token = py_token_id(first_token_id, "first_token");
+        const int max_tokens = py_positive_int(max_tokens_value, "max_tokens");
+        const int eos_token = py_token_id(eos_token_id, "eos_token_id");
+
+        std::array<char, 4096> error = {};
+        std::vector<int> accepted;
+        int count = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            if (!speculative_eval_supported_) {
+                throw std::runtime_error(
+                    "eval_speculative_argmax failed: DS4 speculative eval "
+                    "requires an engine opened with MTP draft tokens > 1.");
+            }
+
+            const int current_pos = ds4_session_pos(session);
+            const int ctx_size = ds4_session_ctx(session);
+            if (ctx_size <= 0 || current_pos >= ctx_size - 1) {
+                throw std::runtime_error(
+                    "eval_speculative_argmax failed: prompt exceeds context");
+            }
+
+            const int remaining = ctx_size - current_pos - 1;
+            const int accepted_cap = std::min(max_tokens, remaining);
+            accepted.resize(static_cast<std::size_t>(accepted_cap));
+            count = ds4_session_eval_speculative_argmax(
+                session, first_token, accepted_cap, eos_token, accepted.data(),
+                accepted_cap, error.data(), error.size());
+            if (count < 0) {
+                logits_ready_ = false;
+            } else {
+                logits_ready_ = true;
+            }
+        }
+        if (count < 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_eval_speculative_argmax failed.";
+            throw std::runtime_error("eval_speculative_argmax failed: " +
+                                     message);
+        }
+        if (count <= 0 || count > static_cast<int>(accepted.size())) {
+            throw std::runtime_error(
+                "eval_speculative_argmax failed: DS4 returned invalid "
+                "accepted token count.");
+        }
+
+        py::list result;
+        for (int i = 0; i < count; ++i) {
+            const int token = accepted[static_cast<std::size_t>(i)];
+            if (token < 0) {
+                throw std::runtime_error(
+                    "eval_speculative_argmax failed: DS4 returned invalid "
+                    "token id.");
+            }
+            result.append(token);
+        }
+        return result;
+    }
+
     void rewind(py::handle pos_value) {
         const int rewind_pos = py_non_negative_int(pos_value, "pos");
         {
@@ -456,6 +686,134 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
                 logits_ready_ = false;
                 rng_state_.reset();
             }
+        }
+    }
+
+    py::bytes save_snapshot() {
+        std::vector<char> data;
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            NativeSnapshot snapshot;
+            result = ds4_session_save_snapshot(session, snapshot.get(),
+                                               error.data(), error.size());
+            if (result == 0) {
+                const ds4_session_snapshot* raw_snapshot = snapshot.get();
+                if (raw_snapshot->ptr == nullptr || raw_snapshot->len == 0) {
+                    throw std::runtime_error(
+                        "save_snapshot failed: DS4 returned an empty "
+                        "snapshot.");
+                }
+                if (raw_snapshot->len >
+                    static_cast<uint64_t>(
+                        std::numeric_limits<std::size_t>::max())) {
+                    throw std::runtime_error(
+                        "save_snapshot failed: snapshot is too large to "
+                        "copy.");
+                }
+                const auto* begin =
+                    reinterpret_cast<const char*>(raw_snapshot->ptr);
+                data.assign(begin, begin + static_cast<std::size_t>(
+                                               raw_snapshot->len));
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_save_snapshot failed.";
+            throw std::runtime_error("save_snapshot failed: " + message);
+        }
+        return bytes_from_vector(data);
+    }
+
+    void load_snapshot(py::bytes snapshot_bytes) {
+        const std::string data = py::cast<std::string>(snapshot_bytes);
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            ds4_session_snapshot snapshot = {};
+            snapshot.ptr =
+                reinterpret_cast<uint8_t*>(const_cast<char*>(data.data()));
+            snapshot.len = static_cast<uint64_t>(data.size());
+            snapshot.cap = snapshot.len;
+            result = ds4_session_load_snapshot(session, &snapshot,
+                                               error.data(), error.size());
+            if (result != 0) {
+                logits_ready_ = false;
+                rng_state_.reset();
+            } else {
+                logits_ready_ = true;
+                rng_state_.reset();
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_load_snapshot failed.";
+            throw std::runtime_error("load_snapshot failed: " + message);
+        }
+    }
+
+    py::bytes save_payload() {
+        std::vector<char> data;
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            const uint64_t byte_count = ds4_session_payload_bytes(session);
+            FilePtr file = open_temporary_file("save_payload");
+            result = ds4_session_save_payload(session, file.get(),
+                                              error.data(), error.size());
+            if (result == 0) {
+                rewind_after_write(file.get(), "save_payload");
+                data =
+                    read_payload_bytes(file.get(), byte_count, "save_payload");
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_save_payload failed.";
+            throw std::runtime_error("save_payload failed: " + message);
+        }
+        return bytes_from_vector(data);
+    }
+
+    void load_payload(py::bytes payload_bytes) {
+        const std::string data = py::cast<std::string>(payload_bytes);
+        std::array<char, 4096> error = {};
+        int result = 0;
+        {
+            py::gil_scoped_release release;
+            std::lock_guard<std::mutex> lock(mutex_);
+            ds4_session* session = get_locked();
+            FilePtr file = open_temporary_file("load_payload");
+            write_all(file.get(), data.data(), data.size(), "load_payload");
+            rewind_after_write(file.get(), "load_payload");
+            result = ds4_session_load_payload(
+                session, file.get(), static_cast<uint64_t>(data.size()),
+                error.data(), error.size());
+            if (result != 0) {
+                logits_ready_ = false;
+                rng_state_.reset();
+            } else {
+                logits_ready_ = true;
+                rng_state_.reset();
+            }
+        }
+        if (result != 0) {
+            std::string message = error.data();
+            if (message.empty())
+                message = "ds4_session_load_payload failed.";
+            throw std::runtime_error("load_payload failed: " + message);
         }
     }
 
@@ -539,6 +897,7 @@ class SessionState : public std::enable_shared_from_this<SessionState> {
     ds4_session* session_ = nullptr;
     std::optional<uint64_t> rng_state_;
     bool logits_ready_ = false;
+    bool speculative_eval_supported_ = false;
     mutable std::mutex mutex_;
     std::vector<ProgressEvent> progress_events_;
     int progress_wakeup_fd_ = -1;
@@ -626,8 +985,10 @@ std::shared_ptr<SessionState> EngineState::create_session(int ctx_size) {
         result = ds4_session_create(&opened, get_locked(), ctx_size);
         if (result == 0 && opened != nullptr) {
             try {
-                session =
-                    std::make_shared<SessionState>(shared_from_this(), opened);
+                const bool speculative_eval_supported =
+                    ds4_engine_mtp_draft_tokens(get_locked()) > 1;
+                session = std::make_shared<SessionState>(
+                    shared_from_this(), opened, speculative_eval_supported);
                 sessions_.push_back(session);
                 opened = nullptr;
             } catch (...) {
@@ -883,7 +1244,18 @@ PYBIND11_MODULE(_native, module) {
         .def("sample", &SessionState::sample, py::arg("temperature"),
              py::arg("top_k"), py::arg("top_p"), py::arg("min_p"),
              py::arg("seed") = py::none())
+        .def("token_logprob", &SessionState::token_logprob,
+             py::arg("token_id"))
+        .def("top_logprobs", &SessionState::top_logprobs, py::arg("k"))
+        .def("eval_speculative_argmax", &SessionState::eval_speculative_argmax,
+             py::arg("first_token"), py::arg("max_tokens"),
+             py::arg("eos_token_id"))
         .def("rewind", &SessionState::rewind, py::arg("pos"))
+        .def("save_snapshot", &SessionState::save_snapshot)
+        .def("load_snapshot", &SessionState::load_snapshot,
+             py::arg("snapshot"))
+        .def("save_payload", &SessionState::save_payload)
+        .def("load_payload", &SessionState::load_payload, py::arg("payload"))
         .def("invalidate", &SessionState::invalidate)
         .def("set_progress_wakeup_fd", &SessionState::set_progress_wakeup_fd,
              py::arg("fd"))
@@ -905,12 +1277,27 @@ PYBIND11_MODULE(_native, module) {
         result["argmax_calls"] = counters.argmax_calls;
         result["argmax_excluding_calls"] = counters.argmax_excluding_calls;
         result["sample_calls"] = counters.sample_calls;
+        result["top_logprobs_calls"] = counters.top_logprobs_calls;
+        result["token_logprob_calls"] = counters.token_logprob_calls;
+        result["speculative_eval_calls"] = counters.speculative_eval_calls;
         result["rewind_calls"] = counters.rewind_calls;
         result["invalidate_calls"] = counters.invalidate_calls;
+        result["payload_bytes_calls"] = counters.payload_bytes_calls;
+        result["save_payload_calls"] = counters.save_payload_calls;
+        result["load_payload_calls"] = counters.load_payload_calls;
+        result["save_snapshot_calls"] = counters.save_snapshot_calls;
+        result["load_snapshot_calls"] = counters.load_snapshot_calls;
+        result["snapshot_free_calls"] = counters.snapshot_free_calls;
         result["token_allocation_calls"] = counters.token_allocation_calls;
         result["token_live_allocations"] = counters.token_live_allocations;
         result["token_peak_live_allocations"] =
             counters.token_peak_live_allocations;
+        result["snapshot_allocation_calls"] =
+            counters.snapshot_allocation_calls;
+        result["snapshot_live_allocations"] =
+            counters.snapshot_live_allocations;
+        result["snapshot_peak_live_allocations"] =
+            counters.snapshot_peak_live_allocations;
         result["call_sequence"] = counters.call_sequence;
         result["last_engine_open_sequence"] =
             counters.last_engine_open_sequence;
@@ -928,8 +1315,26 @@ PYBIND11_MODULE(_native, module) {
         result["last_argmax_excluding_sequence"] =
             counters.last_argmax_excluding_sequence;
         result["last_sample_sequence"] = counters.last_sample_sequence;
+        result["last_top_logprobs_sequence"] =
+            counters.last_top_logprobs_sequence;
+        result["last_token_logprob_sequence"] =
+            counters.last_token_logprob_sequence;
+        result["last_speculative_eval_sequence"] =
+            counters.last_speculative_eval_sequence;
         result["last_rewind_sequence"] = counters.last_rewind_sequence;
         result["last_invalidate_sequence"] = counters.last_invalidate_sequence;
+        result["last_payload_bytes_sequence"] =
+            counters.last_payload_bytes_sequence;
+        result["last_save_payload_sequence"] =
+            counters.last_save_payload_sequence;
+        result["last_load_payload_sequence"] =
+            counters.last_load_payload_sequence;
+        result["last_save_snapshot_sequence"] =
+            counters.last_save_snapshot_sequence;
+        result["last_load_snapshot_sequence"] =
+            counters.last_load_snapshot_sequence;
+        result["last_snapshot_free_sequence"] =
+            counters.last_snapshot_free_sequence;
         return result;
     });
 #endif

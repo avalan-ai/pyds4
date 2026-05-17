@@ -1,7 +1,10 @@
-.PHONY: all bridge build install install-dev fake-bridge ds4-bridge format format-python format-cpp lint lint-python lint-cpp lint-cpp-format lint-cpp-tidy lint-cpp-cppcheck cmake-cpp-lint test test-python test-cpp test-cpp-sanitizers tests mypy typecheck release-tools sdist wheel dist pip-check wheel-smoke
+.PHONY: all bridge build install install-dev fake-bridge ds4-bridge format format-python format-cpp lint lint-python lint-cpp lint-cpp-format lint-cpp-tidy lint-cpp-cppcheck cmake-cpp-lint test test-python test-cpp test-cpp-sanitizers tests mypy typecheck release-tools clean-dist sdist wheel dist release-sdist release-wheel audit-wheel repair-wheel release-dist dist-check publish release version pip-check wheel-smoke
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python)
 PIP ?= $(PYTHON) -m pip
+BUILD ?= $(PYTHON) -m build
+TWINE ?= $(PYTHON) -m twine
+AUDITWHEEL ?= $(PYTHON) -m auditwheel
 PYTEST ?= $(PYTHON) -m pytest
 RUFF ?= $(PYTHON) -m ruff
 BLACK ?= $(PYTHON) -m black
@@ -25,16 +28,22 @@ CXX_TEST_BUILD_DIR ?= build/cpp-tests
 CXX_SANITIZER_BUILD_DIR ?= build/cpp-sanitizers
 PYBIND11_DIR ?= $(shell $(PYTHON) -m pybind11 --cmakedir 2>/dev/null)
 PYDS4_BACKEND ?=
+PYDS4_USE_FAKE_DS4 ?= 0
 DS4_SOURCE_DIR ?=
 DS4_SOURCE_REF ?= 8809b90a1e3247389d7652b565ab6772e036f1ea
 CUDA_ARCH ?=
 DIST_DIR ?= dist
+REPAIRED_DIST_DIR ?= wheelhouse
+RELEASE_BUILD_DIR ?= build/release/$(if $(PYDS4_BACKEND),$(PYDS4_BACKEND),auto)-fake$(PYDS4_USE_FAKE_DS4)/{wheel_tag}
 WHEEL ?= $(DIST_DIR)/pyds4-*.whl
+MANYLINUX_PLAT ?= manylinux_2_28_x86_64
 SMOKE_WHEEL = $(firstword $(wildcard $(WHEEL)))
 SMOKE_BACKEND ?=
 SMOKE_EXPECT_AVAILABLE ?=
 SMOKE_MODEL ?=
 SMOKE_CTX ?= 4096
+TWINE_UPLOAD_ARGS ?= --repository pypi
+VERSION ?=
 
 all: bridge
 
@@ -60,6 +69,7 @@ ds4-bridge:
 	DS4_SOURCE_DIR="$(DS4_SOURCE_DIR)" \
 	DS4_SOURCE_REF="$(DS4_SOURCE_REF)" \
 	PYDS4_BACKEND="$(PYDS4_BACKEND)" \
+	PYDS4_USE_FAKE_DS4="$(PYDS4_USE_FAKE_DS4)" \
 	CUDA_ARCH="$(CUDA_ARCH)" \
 	$(PIP) install -e .
 
@@ -138,16 +148,86 @@ test-cpp-sanitizers:
 tests: test
 
 release-tools:
-	$(PIP) install -e '.[test,release]'
+	$(PYTHON) scripts/install_release_tools.py
+
+clean-dist:
+	@test -n "$(DIST_DIR)" && test "$(DIST_DIR)" != "." && test "$(DIST_DIR)" != "/" || { \
+		echo "Refusing to clean unsafe DIST_DIR=$(DIST_DIR)"; \
+		exit 2; \
+	}
+	$(PYTHON) -c "import shutil; shutil.rmtree('$(DIST_DIR)', ignore_errors=True)"
 
 sdist:
-	$(PYTHON) -m build --sdist --outdir "$(DIST_DIR)"
+	$(BUILD) --sdist --outdir "$(DIST_DIR)"
 
 wheel:
-	$(PYTHON) -m build --wheel --outdir "$(DIST_DIR)"
+	$(BUILD) --wheel --outdir "$(DIST_DIR)"
 
 dist:
-	$(PYTHON) -m build --outdir "$(DIST_DIR)"
+	$(BUILD) --outdir "$(DIST_DIR)"
+
+release-sdist:
+	$(MAKE) release-tools
+	$(BUILD) --no-isolation --sdist --outdir "$(DIST_DIR)"
+
+release-wheel:
+	@test -n "$(DS4_SOURCE_DIR)" || { \
+		echo "DS4_SOURCE_DIR is required for release wheels"; \
+		exit 2; \
+	}
+	$(MAKE) release-tools
+	PYDS4_REQUIRE_DS4_SOURCE=1 \
+	DS4_SOURCE_DIR="$(DS4_SOURCE_DIR)" \
+	DS4_SOURCE_REF="$(DS4_SOURCE_REF)" \
+	PYDS4_BACKEND="$(PYDS4_BACKEND)" \
+	PYDS4_USE_FAKE_DS4="$(PYDS4_USE_FAKE_DS4)" \
+	CUDA_ARCH="$(CUDA_ARCH)" \
+	$(BUILD) --no-isolation --wheel --outdir "$(DIST_DIR)" \
+		--config-setting=build-dir="$(RELEASE_BUILD_DIR)"
+
+audit-wheel:
+	@test "$$(uname -s)" = "Linux" || { \
+		echo "audit-wheel requires Linux; run it on a Linux host or inside a Linux container"; \
+		exit 2; \
+	}
+	$(MAKE) release-tools
+	$(AUDITWHEEL) show $(WHEEL)
+
+repair-wheel:
+	@test -n "$(REPAIRED_DIST_DIR)" && test "$(REPAIRED_DIST_DIR)" != "." && test "$(REPAIRED_DIST_DIR)" != "/" || { \
+		echo "Refusing unsafe REPAIRED_DIST_DIR=$(REPAIRED_DIST_DIR)"; \
+		exit 2; \
+	}
+	$(MAKE) audit-wheel
+	mkdir -p "$(REPAIRED_DIST_DIR)"
+	$(AUDITWHEEL) repair --plat "$(MANYLINUX_PLAT)" --wheel-dir "$(REPAIRED_DIST_DIR)" $(WHEEL)
+
+release-dist: clean-dist
+	$(MAKE) release-sdist
+	$(MAKE) release-wheel
+	$(MAKE) dist-check
+
+dist-check:
+	@test -n "$(wildcard $(DIST_DIR)/*)" || { \
+		echo "No distributions found in $(DIST_DIR)"; \
+		exit 2; \
+	}
+	$(MAKE) release-tools
+	$(TWINE) check $(DIST_DIR)/*
+
+publish: dist-check
+	$(TWINE) upload $(TWINE_UPLOAD_ARGS) $(DIST_DIR)/*
+
+release:
+	$(MAKE) release-dist
+	$(MAKE) publish
+
+version:
+	@test -n "$(VERSION)" || { \
+		echo "Usage: make version VERSION=X.Y.Z"; \
+		exit 2; \
+	}
+	$(PYTHON) scripts/bump_version.py "$(VERSION)"
 
 pip-check:
 	$(PIP) check

@@ -63,6 +63,8 @@ class RecordingSession:
 
     def argmax(self) -> int:
         self._record("session.argmax")
+        if RecordingEngine.next_argmax_tokens:
+            return RecordingEngine.next_argmax_tokens.pop(0)
         return RecordingEngine.next_argmax_token
 
     def argmax_excluding(self, token_id: int) -> int:
@@ -71,11 +73,54 @@ class RecordingSession:
 
     def sample(self, options: pyds4.SamplingOptions) -> int:
         self._record(f"session.sample:{options.seed}")
+        if RecordingEngine.next_sample_tokens:
+            return RecordingEngine.next_sample_tokens.pop(0)
         return 103
+
+    def token_logprob(self, token_id: int) -> float:
+        self._record(f"session.token_logprob:{token_id}")
+        return -0.25
+
+    def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
+        self._record(f"session.top_logprobs:{k}")
+        return [
+            pyds4.TokenScore(token_id=101, logprob=-0.25),
+            pyds4.TokenScore(token_id=102, logprob=-1.25),
+        ][:k]
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        self._record(
+            "session.eval_speculative_argmax:"
+            f"{first_token}:{max_tokens}:{eos_token_id}"
+        )
+        accepted = list(range(first_token, first_token + max_tokens))
+        self._tokens.extend(accepted)
+        return accepted
 
     def rewind(self, pos: int) -> None:
         self._record(f"session.rewind:{pos}")
         del self._tokens[pos:]
+
+    def save_snapshot(self) -> bytes:
+        self._record("session.save_snapshot")
+        return b"snapshot"
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        self._record(f"session.load_snapshot:{snapshot!r}")
+        self._tokens = [7]
+
+    def save_payload(self) -> bytes:
+        self._record("session.save_payload")
+        return b"payload"
+
+    def load_payload(self, payload: bytes) -> None:
+        self._record(f"session.load_payload:{payload!r}")
+        self._tokens = [8]
 
     def invalidate(self) -> None:
         self._record("session.invalidate")
@@ -121,6 +166,9 @@ class RecordingEngine:
     block_first_eval: threading.Event | None = None
     release_first_eval: threading.Event | None = None
     next_argmax_token = 101
+    next_argmax_tokens: list[int] = []
+    next_sample_tokens: list[int] = []
+    token_texts: dict[int, bytes] = {}
     session_type: type[RecordingSession] = RecordingSession
 
     def __init__(self, options: pyds4.EngineOptions) -> None:
@@ -143,6 +191,9 @@ class RecordingEngine:
         RecordingSession.close_started = None
         RecordingSession.close_release = None
         cls.next_argmax_token = 101
+        cls.next_argmax_tokens = []
+        cls.next_sample_tokens = []
+        cls.token_texts = {}
         cls.session_type = RecordingSession
 
     @classmethod
@@ -184,7 +235,7 @@ class RecordingEngine:
 
     def token_text(self, token_id: int) -> bytes:
         self._record(f"engine.token_text:{token_id}")
-        return bytes([token_id])
+        return self.token_texts.get(token_id, bytes([token_id]))
 
     def tokenize_text(self, text: str) -> list[int]:
         self._record(f"engine.tokenize_text:{text}")
@@ -271,8 +322,64 @@ class _ValidatingSessionState:
     ) -> int:
         return 103
 
+    def token_logprob(self, token_id: int) -> float:
+        if isinstance(token_id, bool) or not isinstance(token_id, int):
+            raise TypeError("token_id must be an integer token id.")
+        if token_id < 0:
+            raise ValueError("token_id must be non-negative.")
+        return -0.25
+
+    def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
+        if isinstance(k, bool) or not isinstance(k, int):
+            raise TypeError("k must be a non-negative integer.")
+        if k < 0:
+            raise ValueError("k must be non-negative.")
+        return [pyds4.TokenScore(token_id=101, logprob=-0.25)][:k]
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        if isinstance(first_token, bool) or not isinstance(first_token, int):
+            raise TypeError("first_token must be an integer token id.")
+        if first_token < 0:
+            raise ValueError("first_token must be non-negative.")
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
+            raise TypeError("max_tokens must be a positive integer.")
+        if max_tokens <= 0:
+            raise ValueError("max_tokens must be a positive integer.")
+        if isinstance(eos_token_id, bool) or not isinstance(eos_token_id, int):
+            raise TypeError("eos_token_id must be an integer token id.")
+        if eos_token_id < 0:
+            raise ValueError("eos_token_id must be non-negative.")
+
+        accepted = list(range(first_token, first_token + max_tokens))
+        self.tokens.extend(accepted)
+        self.pos = len(self.tokens)
+        return accepted
+
     def rewind(self, pos: int) -> None:
         del self.tokens[pos:]
+        self.pos = len(self.tokens)
+
+    def save_snapshot(self) -> bytes:
+        return bytes(self.tokens)
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        if not isinstance(snapshot, bytes):
+            raise TypeError("snapshot must be bytes.")
+        self.tokens = list(snapshot)
+        self.pos = len(self.tokens)
+
+    def save_payload(self) -> bytes:
+        return bytes(self.tokens)
+
+    def load_payload(self, payload: bytes) -> None:
+        if not isinstance(payload, bytes):
+            raise TypeError("payload must be bytes.")
+        self.tokens = list(payload)
         self.pos = len(self.tokens)
 
     def invalidate(self) -> None:
@@ -397,7 +504,33 @@ class _FailingSessionState(_ValidatingSessionState):
     ) -> int:
         raise RuntimeError("native detail")
 
+    def token_logprob(self, token_id: int) -> float:
+        raise RuntimeError("native detail")
+
+    def top_logprobs(self, k: int) -> list[pyds4.TokenScore]:
+        raise RuntimeError("native detail")
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        raise RuntimeError("native detail")
+
     def rewind(self, pos: int) -> None:
+        raise RuntimeError("native detail")
+
+    def save_snapshot(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        raise RuntimeError("native detail")
+
+    def save_payload(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_payload(self, payload: bytes) -> None:
         raise RuntimeError("native detail")
 
     def invalidate(self) -> None:
@@ -407,6 +540,11 @@ class _FailingSessionState(_ValidatingSessionState):
 class _NextTokenEvalFailingSessionState(_ValidatingSessionState):
     def eval(self, token_id: int) -> None:
         raise RuntimeError("native detail")
+
+
+class _ContextOverflowSessionState(_ValidatingSessionState):
+    def eval(self, token_id: int) -> None:
+        raise RuntimeError("eval failed: prompt exceeds context")
 
 
 def _engine_with_state(state: object) -> pyds4.Engine:
@@ -440,6 +578,102 @@ def test_async_exports_are_available() -> None:
     assert pyds4.AsyncSession is pyds4_asyncio.AsyncSession
     assert pyds4.GenerationStep is pyds4_asyncio.GenerationStep
     assert pyds4.ProgressEvent is pyds4_asyncio.ProgressEvent
+
+
+def test_async_engine_open_failure_stops_worker_and_allows_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sync_engine = _engine_with_state(_ValidatingEngineState())
+
+    def open_sync_engine(_: pyds4.EngineOptions) -> pyds4.Engine:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise pyds4.Ds4LoadError("native open failed")
+        return sync_engine
+
+    monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", open_sync_engine)
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        engine = pyds4_asyncio.AsyncEngine(options)
+
+        with pytest.raises(pyds4.Ds4LoadError, match="native open failed"):
+            await engine._ensure_open()
+        assert engine._engine is None
+        assert engine._worker is None
+        assert engine.closed is False
+
+        await engine._ensure_open()
+        assert await engine.eos_token_id == 6
+        await engine.aclose()
+
+    asyncio.run(scenario())
+
+    assert attempts == 2
+
+
+def test_async_engine_open_cancellation_stops_worker_and_closes_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    events: list[str] = []
+
+    class SlowOpenEngine:
+        def __init__(self, _: pyds4.EngineOptions) -> None:
+            self.closed = False
+            events.append("engine.open:start")
+            started.set()
+            assert release.wait(timeout=5)
+            events.append("engine.open:end")
+
+        @property
+        def eos_token_id(self) -> int:
+            return 6
+
+        def close(self) -> None:
+            if self.closed:
+                return
+            events.append("engine.close")
+            self.closed = True
+
+    monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", SlowOpenEngine)
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        engine = pyds4_asyncio.AsyncEngine(options)
+        open_task = asyncio.create_task(engine._ensure_open())
+
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+
+        open_task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await open_task
+        assert engine._engine is None
+        assert engine._worker is None
+        assert engine.closed is False
+
+        await engine._ensure_open()
+        assert await engine.eos_token_id == 6
+        await engine.aclose()
+
+    asyncio.run(scenario())
+
+    assert events == [
+        "engine.open:start",
+        "engine.open:end",
+        "engine.close",
+        "engine.open:start",
+        "engine.open:end",
+        "engine.close",
+    ]
 
 
 def test_async_engine_methods_mirror_sync_validation_errors(
@@ -627,8 +861,24 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
                 assert (
                     await session.sample(pyds4.SamplingOptions(seed=7)) == 103
                 )
+                assert await session.token_logprob(101) == -0.25
+                assert await session.top_logprobs(2) == [
+                    pyds4.TokenScore(token_id=101, logprob=-0.25),
+                    pyds4.TokenScore(token_id=102, logprob=-1.25),
+                ]
+                assert await session.eval_speculative_argmax(110, 2, 6) == [
+                    110,
+                    111,
+                ]
+                assert await session.tokens == [1, 2, 110, 111]
                 await session.eval(104)
-                assert await session.tokens == [1, 2, 104]
+                assert await session.tokens == [1, 2, 110, 111, 104]
+                assert await session.save_snapshot() == b"snapshot"
+                await session.load_snapshot(b"snapshot")
+                assert await session.tokens == [7]
+                assert await session.save_payload() == b"payload"
+                await session.load_payload(b"payload")
+                assert await session.tokens == [8]
 
         assert engine.closed is True
         assert len(set(recording_engine.thread_ids)) == 1
@@ -652,7 +902,17 @@ def test_async_engine_uses_one_owner_thread_and_serializes_calls(
         "session.argmax",
         "session.argmax_excluding:101",
         "session.sample:7",
+        "session.token_logprob:101",
+        "session.top_logprobs:2",
+        "session.eval_speculative_argmax:110:2:6",
+        "session.tokens",
         "session.eval",
+        "session.tokens",
+        "session.save_snapshot",
+        "session.load_snapshot:b'snapshot'",
+        "session.tokens",
+        "session.save_payload",
+        "session.load_payload:b'payload'",
         "session.tokens",
         "session.close",
         "engine.close",
@@ -704,8 +964,37 @@ def test_async_session_methods_mirror_sync_validation_errors(
                 with pytest.raises(TypeError, match="SamplingOptions"):
                     await session.sample(object())  # type: ignore[arg-type]
 
+                with pytest.raises(TypeError, match="token_id"):
+                    await session.token_logprob(True)  # type: ignore[arg-type]
+
+                with pytest.raises(ValueError, match="k"):
+                    await session.top_logprobs(-1)
+
+                with pytest.raises(TypeError, match="first_token"):
+                    await session.eval_speculative_argmax(  # type: ignore[arg-type]
+                        True,
+                        2,
+                        6,
+                    )
+
+                with pytest.raises(ValueError, match="max_tokens"):
+                    await session.eval_speculative_argmax(101, 0, 6)
+
+                with pytest.raises(TypeError, match="eos_token_id"):
+                    await session.eval_speculative_argmax(  # type: ignore[arg-type]
+                        101,
+                        2,
+                        True,
+                    )
+
                 with pytest.raises(TypeError, match="pos"):
                     await session.rewind(False)  # type: ignore[arg-type]
+
+                with pytest.raises(TypeError, match="snapshot"):
+                    await session.load_snapshot("bad")  # type: ignore[arg-type]
+
+                with pytest.raises(TypeError, match="payload"):
+                    await session.load_payload(bytearray(b"bad"))  # type: ignore[arg-type]
 
                 with pytest.raises(TypeError, match="advance"):
                     await session.next_token(advance=1)  # type: ignore[arg-type]
@@ -727,6 +1016,11 @@ def test_async_session_methods_mirror_sync_validation_errors(
                 with pytest.raises(TypeError, match="token_id"):
                     await session.next_token(
                         exclude_token_id=True,  # type: ignore[arg-type]
+                    )
+
+                with pytest.raises(TypeError, match="GenerationScoreOptions"):
+                    await session.next_token(
+                        scores=object(),  # type: ignore[arg-type]
                     )
 
                 await session.sync([1, 2])
@@ -776,7 +1070,17 @@ def test_async_session_properties_mirror_sync_validation_errors(
         ("argmax", lambda session: session.argmax()),
         ("argmax_excluding", lambda session: session.argmax_excluding(1)),
         ("sample", lambda session: session.sample(pyds4.SamplingOptions())),
+        ("token_logprob", lambda session: session.token_logprob(1)),
+        ("top_logprobs", lambda session: session.top_logprobs(1)),
+        (
+            "eval_speculative_argmax",
+            lambda session: session.eval_speculative_argmax(1, 1, 6),
+        ),
         ("rewind", lambda session: session.rewind(0)),
+        ("save_snapshot", lambda session: session.save_snapshot()),
+        ("load_snapshot", lambda session: session.load_snapshot(b"snapshot")),
+        ("save_payload", lambda session: session.save_payload()),
+        ("load_payload", lambda session: session.load_payload(b"payload")),
         ("invalidate", lambda session: session.invalidate()),
         ("argmax", lambda session: session.next_token()),
     ],
@@ -920,12 +1224,14 @@ def test_async_next_token_selects_decodes_and_commits_in_one_job(
                     is_eos=False,
                     advanced=True,
                     token_bytes=b"g",
+                    decoded_text="g",
                 )
                 assert second == pyds4.GenerationStep(
                     token_id=103,
                     is_eos=False,
                     advanced=True,
                     token_bytes=b"g",
+                    decoded_text="g",
                 )
                 assert await session.tokens == [1, 2, 103, 103]
 
@@ -975,6 +1281,112 @@ def test_async_next_token_stops_before_eos_eval_and_decode(
     assert "engine.token_text:6" not in recording_engine.events
 
 
+def test_async_next_token_can_include_scores_before_eval(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_token = 101
+    recording_engine.token_texts = {101: b"A"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        scores = pyds4.GenerationScoreOptions(
+            mode=pyds4.TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+            top_k=2,
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                step = await session.next_token(decode=True, scores=scores)
+
+                assert step == pyds4.GenerationStep(
+                    token_id=101,
+                    is_eos=False,
+                    advanced=True,
+                    token_bytes=b"A",
+                    decoded_text="A",
+                    token_logprob=-0.25,
+                    top_logprobs=(
+                        pyds4.TokenScore(token_id=101, logprob=-0.25),
+                        pyds4.TokenScore(token_id=102, logprob=-1.25),
+                    ),
+                )
+                assert await session.tokens == [1, 2, 101]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events == [
+        "engine.open",
+        "engine.create_session:64",
+        "session.sync",
+        "session.argmax",
+        "engine.eos_token_id",
+        "session.top_logprobs:2",
+        "session.token_logprob:101",
+        "session.eval",
+        "engine.token_text:101",
+        "session.tokens",
+        "session.close",
+        "engine.close",
+    ]
+
+
+def test_async_next_token_skips_scores_for_stop_eos(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_token = 6
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        scores = pyds4.GenerationScoreOptions(
+            mode=pyds4.TokenScoreMode.TOKEN_LOGPROB,
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                step = await session.next_token(decode=True, scores=scores)
+
+                assert step == pyds4.GenerationStep(
+                    token_id=6,
+                    is_eos=True,
+                    advanced=False,
+                    token_bytes=None,
+                )
+                assert await session.tokens == [1, 2]
+
+    asyncio.run(scenario())
+
+    assert "session.token_logprob:6" not in recording_engine.events
+    assert "session.top_logprobs" not in recording_engine.events
+    assert "session.eval" not in recording_engine.events
+
+
+def test_async_next_token_decoded_text_replaces_invalid_utf8(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_token = 101
+    recording_engine.token_texts = {101: b"\xff"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                step = await session.next_token(decode=True)
+
+                assert step == pyds4.GenerationStep(
+                    token_id=101,
+                    is_eos=False,
+                    advanced=True,
+                    token_bytes=b"\xff",
+                    decoded_text="\ufffd",
+                )
+
+    asyncio.run(scenario())
+
+
 def test_async_next_token_rejects_sampling_with_exclusion(
     recording_engine: type[RecordingEngine],
 ) -> None:
@@ -990,6 +1402,442 @@ def test_async_next_token_rejects_sampling_with_exclusion(
                     )
 
     asyncio.run(scenario())
+
+
+def test_async_stream_text_greedy_decodes_and_advances(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [101, 102, 103]
+    recording_engine.token_texts = {101: b"A", 102: b"B", 103: b"C"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(
+                        pyds4.GenerationOptions(max_new_tokens=3)
+                    )
+                ]
+
+                assert chunks == ["A", "B", "C"]
+                assert await session.tokens == [1, 2, 101, 102, 103]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events == [
+        "engine.open",
+        "engine.create_session:64",
+        "session.sync",
+        "session.argmax",
+        "engine.eos_token_id",
+        "session.eval",
+        "engine.token_text:101",
+        "session.argmax",
+        "engine.eos_token_id",
+        "session.eval",
+        "engine.token_text:102",
+        "session.argmax",
+        "engine.eos_token_id",
+        "session.eval",
+        "engine.token_text:103",
+        "session.tokens",
+        "session.close",
+        "engine.close",
+    ]
+
+
+def test_async_stream_text_sampling_uses_sampling_options(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_sample_tokens = [201, 202]
+    recording_engine.token_texts = {201: b"x", 202: b"y"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        generation_options = pyds4.GenerationOptions(
+            max_new_tokens=2,
+            sampling=pyds4.SamplingOptions(temperature=0.7, seed=7),
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1])
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(generation_options)
+                ]
+
+                assert chunks == ["x", "y"]
+                assert await session.tokens == [1, 201, 202]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events.count("session.sample:7") == 2
+    assert recording_engine.events.count("session.eval") == 2
+
+
+def test_async_stream_text_suppresses_stop_string_within_token(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [111, 112]
+    recording_engine.token_texts = {
+        111: b"alpha STOP omega",
+        112: b"not selected",
+    }
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        generation_options = pyds4.GenerationOptions(
+            max_new_tokens=2,
+            stop_strings=" STOP",
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1])
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(generation_options)
+                ]
+
+                assert chunks == ["alpha"]
+                assert await session.tokens == [1, 111]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events.count("session.argmax") == 1
+
+
+def test_async_stream_text_suppresses_stop_string_across_tokens(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [121, 122, 123]
+    recording_engine.token_texts = {
+        121: b"alpha ST",
+        122: b"OP omega",
+        123: b"not selected",
+    }
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        generation_options = pyds4.GenerationOptions(
+            max_new_tokens=3,
+            stop_strings="STOP",
+        )
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1])
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(generation_options)
+                ]
+
+                assert "".join(chunks) == "alpha "
+                assert await session.tokens == [1, 121, 122]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events.count("session.argmax") == 2
+
+
+def test_async_stream_text_decodes_split_utf8(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [131, 132, 133]
+    recording_engine.token_texts = {131: b"caf", 132: b"\xc3", 133: b"\xa9"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(
+                        pyds4.GenerationOptions(max_new_tokens=3)
+                    )
+                ]
+
+                assert chunks == ["caf", "é"]
+
+    asyncio.run(scenario())
+
+
+def test_async_stream_text_stops_before_eos_text(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [101, 6, 102]
+    recording_engine.token_texts = {101: b"A", 6: b"<eos>", 102: b"B"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                chunks = [
+                    chunk
+                    async for chunk in session.stream_text(
+                        pyds4.GenerationOptions(max_new_tokens=3)
+                    )
+                ]
+
+                assert chunks == ["A"]
+                assert await session.tokens == [101]
+
+    asyncio.run(scenario())
+
+    assert "engine.token_text:6" not in recording_engine.events
+    assert recording_engine.events.count("session.argmax") == 2
+
+
+def test_async_generate_text_matches_joined_stream_chunks(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [101, 102, 103, 101, 102, 103]
+    recording_engine.token_texts = {101: b"A", 102: b"B", 103: b"C"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        generation = pyds4.GenerationOptions(max_new_tokens=3)
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                streamed_chunks = [
+                    chunk async for chunk in session.stream_text(generation)
+                ]
+
+            async with await engine.create_session(64) as session:
+                generated_text = await session.generate_text(generation)
+
+            assert generated_text == "".join(streamed_chunks) == "ABC"
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events.count("session.argmax") == 6
+    assert recording_engine.events.count("session.eval") == 6
+
+
+def test_async_generate_text_respects_max_token_limit(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [111, 112, 113]
+    recording_engine.token_texts = {111: b"X", 112: b"Y", 113: b"Z"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                text = await session.generate_text(
+                    pyds4.GenerationOptions(max_new_tokens=2)
+                )
+
+                assert text == "XY"
+                assert await session.tokens == [111, 112]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events.count("session.argmax") == 2
+    assert "engine.token_text:113" not in recording_engine.events
+
+
+def test_async_generate_text_stops_at_eos(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    recording_engine.next_argmax_tokens = [101, 6, 102]
+    recording_engine.token_texts = {101: b"A", 6: b"<eos>", 102: b"B"}
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                text = await session.generate_text(
+                    pyds4.GenerationOptions(max_new_tokens=3)
+                )
+
+                assert text == "A"
+                assert await session.tokens == [101]
+
+    asyncio.run(scenario())
+
+    assert recording_engine.events.count("session.argmax") == 2
+    assert "engine.token_text:6" not in recording_engine.events
+
+
+def test_async_generate_text_closed_session_and_engine_errors(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+        generation = pyds4.GenerationOptions(max_new_tokens=1)
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            closed_session = await engine.create_session(64)
+            await closed_session.aclose()
+            with pytest.raises(pyds4.Ds4ContextError, match="session"):
+                await closed_session.generate_text(generation)
+
+            live_session = await engine.create_session(64)
+            await engine.aclose()
+            with pytest.raises(pyds4.Ds4LoadError, match="engine"):
+                await live_session.generate_text(generation)
+            await live_session.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_async_generate_text_rejects_invalid_options_before_native_call(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                with pytest.raises(TypeError, match="GenerationOptions"):
+                    await session.generate_text(object())  # type: ignore[arg-type]
+
+    asyncio.run(scenario())
+
+    assert "session.argmax" not in recording_engine.events
+    assert "session.eval" not in recording_engine.events
+
+
+@pytest.mark.parametrize(
+    ("engine_state", "generation_options", "error_match"),
+    [
+        (
+            _ValidatingEngineState(_FailingSessionState()),
+            pyds4.GenerationOptions(max_new_tokens=1),
+            "argmax failed: native detail",
+        ),
+        (
+            _ValidatingEngineState(_FailingSessionState()),
+            pyds4.GenerationOptions(
+                max_new_tokens=1,
+                sampling=pyds4.SamplingOptions(temperature=0.7, seed=1),
+            ),
+            "sample failed: native detail",
+        ),
+        (
+            _ValidatingEngineState(_NextTokenEvalFailingSessionState()),
+            pyds4.GenerationOptions(max_new_tokens=1),
+            "eval failed: native detail",
+        ),
+        (
+            _FailingEngineState(),
+            pyds4.GenerationOptions(max_new_tokens=1),
+            "token_text failed: native detail",
+        ),
+    ],
+)
+def test_async_stream_text_generation_failures_mirror_sync_error_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    engine_state: object,
+    generation_options: pyds4.GenerationOptions,
+    error_match: str,
+) -> None:
+    engine = _engine_with_state(engine_state)
+    monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as async_engine:
+            async with await async_engine.create_session(64) as session:
+                stream = session.stream_text(generation_options)
+                with pytest.raises(
+                    pyds4.Ds4GenerationError,
+                    match=error_match,
+                ):
+                    await anext(stream)
+
+    asyncio.run(scenario())
+
+
+def test_async_stream_text_context_overflow_maps_to_context_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _ValidatingEngineState(_ContextOverflowSessionState())
+    engine = _engine_with_state(state)
+    monkeypatch.setattr(pyds4_asyncio, "_SyncEngine", lambda _: engine)
+
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as async_engine:
+            async with await async_engine.create_session(64) as session:
+                stream = session.stream_text(
+                    pyds4.GenerationOptions(max_new_tokens=1)
+                )
+                with pytest.raises(
+                    pyds4.Ds4ContextError,
+                    match="prompt exceeds context",
+                ):
+                    await anext(stream)
+
+    asyncio.run(scenario())
+
+
+def test_async_stream_text_rejects_invalid_generation_options(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    async def scenario() -> None:
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                with pytest.raises(TypeError, match="GenerationOptions"):
+                    session.stream_text(object())  # type: ignore[arg-type]
+
+    asyncio.run(scenario())
+
+    assert "session.argmax" not in recording_engine.events
+
+
+def test_async_stream_text_cancellation_poisons_session(
+    recording_engine: type[RecordingEngine],
+) -> None:
+    async def scenario() -> None:
+        started = threading.Event()
+        release = threading.Event()
+        recording_engine.block_first_eval = started
+        recording_engine.release_first_eval = release
+        recording_engine.token_texts = {101: b"A"}
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4_asyncio.AsyncEngine(options) as engine:
+            session = await engine.create_session(64)
+            await session.sync([1, 2])
+            stream = session.stream_text(
+                pyds4.GenerationOptions(max_new_tokens=1)
+            )
+            task = asyncio.create_task(anext(stream))
+            for _ in range(100):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            with pytest.raises(pyds4.Ds4Cancelled, match="mutating operation"):
+                await session.tokens
+
+            release.set()
+            await session.aclose()
+
+    asyncio.run(scenario())
+
+    assert "session.close" in recording_engine.events
 
 
 def test_async_queued_cancelled_job_is_not_run(
@@ -1226,6 +2074,83 @@ def test_async_fake_native_progress_notifications_are_queued() -> None:
                     current=4,
                     total=4,
                 )
+
+    asyncio.run(scenario())
+
+
+def test_async_fake_native_snapshot_and_payload_round_trip() -> None:
+    native = pytest.importorskip("pyds4._native")
+    if not getattr(native, "__ds4_fake_native__", False):
+        pytest.skip("requires a PYDS4_USE_FAKE_DS4 build")
+
+    async def scenario() -> None:
+        native.fake_reset_counters()
+        options = pyds4.EngineOptions(model_path="model.gguf", backend="cpu")
+
+        async with pyds4.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                await session.eval(1000 + ord("A"))
+                snapshot = await session.save_snapshot()
+                payload = await session.save_payload()
+
+                await session.eval(1000 + ord("B"))
+                assert await session.tokens == [
+                    1,
+                    2,
+                    1000 + ord("A"),
+                    1000 + ord("B"),
+                ]
+
+                await session.load_snapshot(snapshot)
+                assert await session.tokens == [1, 2, 1000 + ord("A")]
+
+                await session.invalidate()
+                await session.load_payload(payload)
+                assert await session.tokens == [1, 2, 1000 + ord("A")]
+
+        counts = dict(native.fake_counters())
+        assert counts["save_snapshot_calls"] == 1
+        assert counts["load_snapshot_calls"] == 1
+        assert counts["save_payload_calls"] >= 2
+        assert counts["load_payload_calls"] >= 2
+        assert counts["snapshot_live_allocations"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_async_fake_native_speculative_eval_runs_on_owner_thread() -> None:
+    native = pytest.importorskip("pyds4._native")
+    if not getattr(native, "__ds4_fake_native__", False):
+        pytest.skip("requires a PYDS4_USE_FAKE_DS4 build")
+
+    async def scenario() -> None:
+        native.fake_reset_counters()
+        options = pyds4.EngineOptions(
+            model_path="model.gguf",
+            backend="cpu",
+            mtp_path="mtp.gguf",
+            mtp_draft_tokens=4,
+        )
+
+        async with pyds4.AsyncEngine(options) as engine:
+            async with await engine.create_session(64) as session:
+                await session.sync([1, 2])
+                accepted = await session.eval_speculative_argmax(
+                    1000 + ord("A"),
+                    3,
+                    await engine.eos_token_id,
+                )
+                assert accepted == [
+                    1000 + ord("A"),
+                    1000 + ord("B"),
+                    1000 + ord("C"),
+                ]
+                assert await session.tokens == [1, 2, *accepted]
+
+        counts = dict(native.fake_counters())
+        assert counts["speculative_eval_calls"] == 1
+        assert counts["eval_calls"] == 0
 
     asyncio.run(scenario())
 

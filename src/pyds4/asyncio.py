@@ -1,22 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from queue import Queue
 from threading import Event, Thread
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
-from .errors import Ds4Cancelled, Ds4ContextError, Ds4LoadError
+from .errors import (
+    Ds4Cancelled,
+    Ds4ContextError,
+    Ds4GenerationError,
+    Ds4LoadError,
+)
 from .native import Engine as _SyncEngine
 from .native import Session as _SyncSession
 from .types import (
     EngineOptions,
+    GenerationOptions,
+    GenerationScoreOptions,
     GenerationStep,
     ProgressEvent,
     SamplingOptions,
+    StopStringBuffer,
     ThinkMode,
+    TokenScore,
+    TokenScoreMode,
 )
 
 _T = TypeVar("_T")
@@ -41,6 +52,53 @@ def _set_future_exception(
 def _validate_bool_option(name: str, value: bool) -> None:
     if not isinstance(value, bool):
         raise TypeError(f"{name} must be a boolean.")
+
+
+def _validate_generation_options(
+    options: GenerationOptions | None,
+) -> GenerationOptions:
+    if options is None:
+        return GenerationOptions()
+    if not isinstance(options, GenerationOptions):
+        raise TypeError(
+            "options must be a GenerationOptions instance or None."
+        )
+    return options
+
+
+def _validate_generation_score_options(
+    options: GenerationScoreOptions | None,
+) -> GenerationScoreOptions:
+    if options is None:
+        return GenerationScoreOptions()
+    if not isinstance(options, GenerationScoreOptions):
+        raise TypeError(
+            "scores must be a GenerationScoreOptions instance or None."
+        )
+    return options
+
+
+def _requests_token_logprob(options: GenerationScoreOptions) -> bool:
+    return options.mode in {
+        TokenScoreMode.TOKEN_LOGPROB,
+        TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+    }
+
+
+def _requests_top_logprobs(options: GenerationScoreOptions) -> bool:
+    return options.mode in {
+        TokenScoreMode.TOP_LOGPROBS,
+        TokenScoreMode.TOKEN_LOGPROB_AND_TOP_LOGPROBS,
+    }
+
+
+def _context_error_from_generation_error(
+    error: Ds4GenerationError,
+) -> Ds4ContextError | None:
+    message = str(error)
+    if "prompt exceeds context" in message.lower():
+        return Ds4ContextError(message)
+    return None
 
 
 @dataclass(slots=True)
@@ -307,9 +365,30 @@ class AsyncEngine:
                 raise Ds4LoadError("DS4 async engine is closed.")
             if self._worker is None:
                 self._worker = _OwnerWorker()
-            self._engine = await self._worker.call(
-                lambda: _SyncEngine(self._options)
-            )
+            worker = self._worker
+            opened_engine: _SyncEngine | None = None
+
+            def open_engine() -> _SyncEngine:
+                nonlocal opened_engine
+
+                opened_engine = _SyncEngine(self._options)
+                return opened_engine
+
+            def close_cancelled_open() -> None:
+                if opened_engine is not None:
+                    opened_engine.close()
+
+            try:
+                self._engine = await worker.call(
+                    open_engine,
+                    on_cancelled_after_run=close_cancelled_open,
+                )
+            except BaseException:
+                self._engine = None
+                if self._worker is worker:
+                    self._worker = None
+                worker.stop()
+                raise
 
     async def _call_engine(
         self,
@@ -464,6 +543,31 @@ class AsyncSession:
             mutating=True,
         )
 
+    async def token_logprob(self, token_id: int) -> float:
+        return await self._call_session(
+            lambda session: session.token_logprob(token_id)
+        )
+
+    async def top_logprobs(self, k: int) -> list[TokenScore]:
+        return await self._call_session(
+            lambda session: session.top_logprobs(k)
+        )
+
+    async def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        return await self._call_session(
+            lambda session: session.eval_speculative_argmax(
+                first_token,
+                max_tokens,
+                eos_token_id,
+            ),
+            mutating=True,
+        )
+
     async def next_token(
         self,
         options: SamplingOptions | None = None,
@@ -472,10 +576,12 @@ class AsyncSession:
         decode: bool = False,
         stop_on_eos: bool = True,
         exclude_token_id: int | None = None,
+        scores: GenerationScoreOptions | None = None,
     ) -> GenerationStep:
         _validate_bool_option("advance", advance)
         _validate_bool_option("decode", decode)
         _validate_bool_option("stop_on_eos", stop_on_eos)
+        score_options = _validate_generation_score_options(scores)
         if options is not None and exclude_token_id is not None:
             raise ValueError(
                 "exclude_token_id cannot be used with sampling options."
@@ -494,18 +600,34 @@ class AsyncSession:
 
             is_eos = token_id == engine.eos_token_id
             should_advance = advance and not (stop_on_eos and is_eos)
+
+            top_logprobs: tuple[TokenScore, ...] = ()
+            token_logprob: float | None = None
+            if not (stop_on_eos and is_eos):
+                if _requests_top_logprobs(score_options):
+                    top_logprobs = tuple(
+                        session.top_logprobs(score_options.top_k)
+                    )
+                if _requests_token_logprob(score_options):
+                    token_logprob = session.token_logprob(token_id)
+
             if should_advance:
                 session.eval(token_id)
 
             token_bytes = None
+            decoded_text = None
             if decode and not (stop_on_eos and is_eos):
                 token_bytes = engine.token_text(token_id)
+                decoded_text = token_bytes.decode("utf-8", errors="replace")
 
             return GenerationStep(
                 token_id=token_id,
                 is_eos=is_eos,
                 advanced=should_advance,
                 token_bytes=token_bytes,
+                decoded_text=decoded_text,
+                token_logprob=token_logprob,
+                top_logprobs=top_logprobs,
             )
 
         try:
@@ -520,9 +642,80 @@ class AsyncSession:
         finally:
             self._drain_progress_events_to_queue()
 
+    def stream_text(
+        self,
+        options: GenerationOptions | None = None,
+    ) -> AsyncIterator[str]:
+        generation_options = _validate_generation_options(options)
+        return self._stream_text(generation_options)
+
+    async def generate_text(
+        self,
+        options: GenerationOptions | None = None,
+    ) -> str:
+        chunks = [chunk async for chunk in self.stream_text(options)]
+        return "".join(chunks)
+
+    async def _stream_text(
+        self,
+        generation_options: GenerationOptions,
+    ) -> AsyncIterator[str]:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        stop_buffer = StopStringBuffer(
+            cast(tuple[str, ...], generation_options.stop_strings)
+        )
+
+        for _ in range(generation_options.max_new_tokens):
+            try:
+                step = await self.next_token(
+                    generation_options.sampling,
+                    advance=generation_options.advance,
+                    decode=True,
+                    stop_on_eos=generation_options.stop_on_eos,
+                )
+            except Ds4GenerationError as error:
+                context_error = _context_error_from_generation_error(error)
+                if context_error is not None:
+                    raise context_error from error
+                raise
+
+            if step.is_eos:
+                break
+            if step.token_bytes:
+                text = decoder.decode(step.token_bytes, final=False)
+                for chunk in stop_buffer.push(text):
+                    yield chunk
+                if stop_buffer.stopped:
+                    return
+
+        for chunk in stop_buffer.push(decoder.decode(b"", final=True)):
+            yield chunk
+        for chunk in stop_buffer.flush():
+            yield chunk
+
     async def rewind(self, pos: int) -> None:
         await self._call_session(
             lambda session: session.rewind(pos),
+            mutating=True,
+        )
+
+    async def save_snapshot(self) -> bytes:
+        return await self._call_session(
+            lambda session: session.save_snapshot()
+        )
+
+    async def load_snapshot(self, snapshot: bytes) -> None:
+        await self._call_session(
+            lambda session: session.load_snapshot(snapshot),
+            mutating=True,
+        )
+
+    async def save_payload(self) -> bytes:
+        return await self._call_session(lambda session: session.save_payload())
+
+    async def load_payload(self, payload: bytes) -> None:
+        await self._call_session(
+            lambda session: session.load_payload(payload),
             mutating=True,
         )
 

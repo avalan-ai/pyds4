@@ -72,6 +72,12 @@ typedef struct {
     uint32_t comp_cap;
 } ds4_context_memory;
 
+typedef struct {
+    uint8_t* ptr;
+    uint64_t len;
+    uint64_t cap;
+} ds4_session_snapshot;
+
 int ds4_engine_open(ds4_engine** out, const ds4_engine_options* opt);
 void ds4_engine_close(ds4_engine* e);
 const char* ds4_backend_name(ds4_backend backend);
@@ -114,7 +120,13 @@ int ds4_session_argmax(ds4_session* s);
 int ds4_session_argmax_excluding(ds4_session* s, int excluded_id);
 int ds4_session_sample(ds4_session* s, float temperature, int top_k,
                        float top_p, float min_p, uint64_t* rng);
+int ds4_session_top_logprobs(ds4_session* s, ds4_token_score* out, int k);
+int ds4_session_token_logprob(ds4_session* s, int token, ds4_token_score* out);
 int ds4_session_eval(ds4_session* s, int token, char* err, size_t errlen);
+int ds4_session_eval_speculative_argmax(ds4_session* s, int first_token,
+                                        int max_tokens, int eos_token,
+                                        int* accepted, int accepted_cap,
+                                        char* err, size_t errlen);
 void ds4_session_invalidate(ds4_session* s);
 void ds4_session_rewind(ds4_session* s, int pos);
 int ds4_session_pos(ds4_session* s);
@@ -123,6 +135,16 @@ int ds4_engine_routed_quant_bits(ds4_engine* e);
 bool ds4_engine_has_mtp(ds4_engine* e);
 int ds4_engine_mtp_draft_tokens(ds4_engine* e);
 const ds4_tokens* ds4_session_tokens(ds4_session* s);
+uint64_t ds4_session_payload_bytes(ds4_session* s);
+int ds4_session_save_payload(ds4_session* s, FILE* fp, char* err,
+                             size_t errlen);
+int ds4_session_load_payload(ds4_session* s, FILE* fp, uint64_t payload_bytes,
+                             char* err, size_t errlen);
+int ds4_session_save_snapshot(ds4_session* s, ds4_session_snapshot* snap,
+                              char* err, size_t errlen);
+int ds4_session_load_snapshot(ds4_session* s, const ds4_session_snapshot* snap,
+                              char* err, size_t errlen);
+void ds4_session_snapshot_free(ds4_session_snapshot* snap);
 
 typedef struct {
     uint64_t engine_open_calls;
@@ -135,11 +157,23 @@ typedef struct {
     uint64_t argmax_calls;
     uint64_t argmax_excluding_calls;
     uint64_t sample_calls;
+    uint64_t top_logprobs_calls;
+    uint64_t token_logprob_calls;
+    uint64_t speculative_eval_calls;
     uint64_t rewind_calls;
     uint64_t invalidate_calls;
+    uint64_t payload_bytes_calls;
+    uint64_t save_payload_calls;
+    uint64_t load_payload_calls;
+    uint64_t save_snapshot_calls;
+    uint64_t load_snapshot_calls;
+    uint64_t snapshot_free_calls;
     uint64_t token_allocation_calls;
     uint64_t token_live_allocations;
     uint64_t token_peak_live_allocations;
+    uint64_t snapshot_allocation_calls;
+    uint64_t snapshot_live_allocations;
+    uint64_t snapshot_peak_live_allocations;
     uint64_t call_sequence;
     uint64_t last_engine_open_sequence;
     uint64_t last_engine_close_sequence;
@@ -151,8 +185,17 @@ typedef struct {
     uint64_t last_argmax_sequence;
     uint64_t last_argmax_excluding_sequence;
     uint64_t last_sample_sequence;
+    uint64_t last_top_logprobs_sequence;
+    uint64_t last_token_logprob_sequence;
+    uint64_t last_speculative_eval_sequence;
     uint64_t last_rewind_sequence;
     uint64_t last_invalidate_sequence;
+    uint64_t last_payload_bytes_sequence;
+    uint64_t last_save_payload_sequence;
+    uint64_t last_load_payload_sequence;
+    uint64_t last_save_snapshot_sequence;
+    uint64_t last_load_snapshot_sequence;
+    uint64_t last_snapshot_free_sequence;
 } pyds4_fake_counters;
 
 void pyds4_fake_reset_counters(void);

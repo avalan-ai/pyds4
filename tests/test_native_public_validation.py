@@ -69,6 +69,26 @@ class _SessionState:
     ) -> object:
         return object()
 
+    def token_logprob(self, token_id: int) -> object:
+        return "bad"
+
+    def top_logprobs(self, k: int) -> object:
+        return [(True, -0.25)]
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> object:
+        return object()
+
+    def save_snapshot(self) -> object:
+        return "not bytes"
+
+    def save_payload(self) -> object:
+        return "not bytes"
+
 
 class _FailingEngineState:
     closed = False
@@ -148,7 +168,33 @@ class _FailingSessionState:
     ) -> int:
         raise RuntimeError("native detail")
 
+    def token_logprob(self, token_id: int) -> float:
+        raise RuntimeError("native detail")
+
+    def top_logprobs(self, k: int) -> list[tuple[int, float]]:
+        raise RuntimeError("native detail")
+
+    def eval_speculative_argmax(
+        self,
+        first_token: int,
+        max_tokens: int,
+        eos_token_id: int,
+    ) -> list[int]:
+        raise RuntimeError("native detail")
+
     def rewind(self, pos: int) -> None:
+        raise RuntimeError("native detail")
+
+    def save_snapshot(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_snapshot(self, snapshot: bytes) -> None:
+        raise RuntimeError("native detail")
+
+    def save_payload(self) -> bytes:
+        raise RuntimeError("native detail")
+
+    def load_payload(self, payload: bytes) -> None:
         raise RuntimeError("native detail")
 
     def invalidate(self) -> None:
@@ -288,6 +334,11 @@ def test_session_rejects_malformed_native_inspection_values(
         ("argmax", ()),
         ("argmax_excluding", (1,)),
         ("sample", (pyds4.SamplingOptions(),)),
+        ("token_logprob", (1,)),
+        ("top_logprobs", (1,)),
+        ("eval_speculative_argmax", (1, 1, 6)),
+        ("save_snapshot", ()),
+        ("save_payload", ()),
     ],
 )
 def test_session_rejects_malformed_native_token_results(
@@ -308,7 +359,14 @@ def test_session_rejects_malformed_native_token_results(
         ("argmax", ()),
         ("argmax_excluding", (1,)),
         ("sample", (pyds4.SamplingOptions(),)),
+        ("token_logprob", (1,)),
+        ("top_logprobs", (1,)),
+        ("eval_speculative_argmax", (1, 1, 6)),
         ("rewind", (0,)),
+        ("save_snapshot", ()),
+        ("load_snapshot", (b"snapshot",)),
+        ("save_payload", ()),
+        ("load_payload", (b"payload",)),
         ("invalidate", ()),
     ],
 )
