@@ -56,13 +56,10 @@ The workflow builds:
 The `cuda_arch` workflow input is passed to `CMAKE_CUDA_ARCHITECTURES` through
 `CUDA_ARCH`; the default is `90`.
 
-CUDA wheels are audited with `auditwheel show`, but they intentionally keep
-CUDA runtime and cuBLAS libraries external and are built as `linux_x86_64`
-wheels. PyPI rejects that platform tag, so the workflow attaches CUDA wheels to
-the GitHub release and publishes only the sdist and macOS wheels to PyPI.
-Strict manylinux CUDA wheels need either a PyPI file-size limit increase or a
-packaging change that depends on external NVIDIA CUDA wheels and sets a
-matching runtime library path.
+CUDA wheels are audited with `auditwheel show` and repaired to
+`manylinux_2_38_x86_64` with CUDA runtime and cuBLAS libraries explicitly left
+external. This keeps the Linux wheels small enough for PyPI, but Linux users
+must provide compatible NVIDIA CUDA 12 runtime libraries on the target host.
 
 ## Subsequent versions
 

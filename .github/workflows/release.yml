@@ -145,7 +145,7 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends git gzip make tar
+          apt-get install -y --no-install-recommends git gzip make patchelf tar
           rm -rf /var/lib/apt/lists/*
 
       - uses: actions/checkout@v4
@@ -172,6 +172,15 @@ jobs:
         run: make release-wheel DIST_DIR=dist
 
       - name: Audit CUDA wheel
+        run: make audit-wheel DIST_DIR=dist
+
+      - name: Repair CUDA wheel for PyPI
+        run: |
+          make repair-cuda-wheel DIST_DIR=dist REPAIRED_DIST_DIR=repaired
+          rm dist/*.whl
+          mv repaired/*.whl dist/
+
+      - name: Audit repaired CUDA wheel
         run: make audit-wheel DIST_DIR=dist
 
       - uses: actions/upload-artifact@v4
@@ -219,7 +228,7 @@ jobs:
         run: |
           mkdir -p pypi-dist
           cp dist/*.tar.gz pypi-dist/
-          cp dist/*macosx*.whl pypi-dist/
+          cp dist/*.whl pypi-dist/
 
       - name: Check PyPI distributions
         run: make dist-check DIST_DIR=pypi-dist

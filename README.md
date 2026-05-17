@@ -2,7 +2,7 @@
 <h3 align="center">Python bindings for the DS4 DeepSeek V4 Flash inference engine</h3>
 
 <p align="center">
-  <a href="https://github.com/avalan-ai/pyds4/actions/workflows/fake-native.yml"><img src="https://github.com/avalan-ai/pyds4/actions/workflows/fake-native.yml/badge.svg" alt="Tests" /></a>
+  <a href="https://github.com/avalan-ai/pyds4/actions/workflows/fake-native.yml"><img src="https://github.com/avalan-ai/pyds4/actions/workflows/fake-native.yml/badge.svg" alt="C++ & python tests" /></a>
   <a href="https://pypi.org/project/pyds4/"><img src="https://img.shields.io/pypi/v/pyds4.svg?label=PyPI" alt="PyPI" /></a>
   <img src="https://img.shields.io/pypi/pyversions/pyds4.svg" alt="Python versions" />
   <img src="https://img.shields.io/github/last-commit/avalan-ai/pyds4.svg" alt="Last commit" />
@@ -448,9 +448,7 @@ builds the sdist, macOS arm64 Metal wheels, and Linux x86_64 CUDA wheels.
 The `cuda_arch` workflow input controls the NVIDIA architecture passed to
 CMake.
 
-The CUDA wheel is audited in the release workflow but keeps CUDA runtime and
-cuBLAS libraries external, so it is built as a `linux_x86_64` wheel. PyPI
-rejects that platform tag, so CUDA wheels are attached to the GitHub release;
-PyPI receives the sdist and macOS wheels. A strict `auditwheel repair`
-currently bundles those NVIDIA libraries and creates an artifact too large for
-PyPI's default file limit.
+The CUDA wheel is audited in the release workflow and repaired to a
+`manylinux_2_38_x86_64` wheel for PyPI. CUDA runtime and cuBLAS libraries are
+left external, so Linux installs must provide compatible NVIDIA CUDA 12
+runtime libraries on the target host.

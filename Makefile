@@ -1,4 +1,4 @@
-.PHONY: all bridge build install install-dev fake-bridge ds4-bridge format format-python format-cpp lint lint-python lint-cpp lint-cpp-format lint-cpp-tidy lint-cpp-cppcheck cmake-cpp-lint test test-python test-cpp test-cpp-sanitizers tests mypy typecheck release-tools clean-dist sdist wheel dist release-sdist release-wheel audit-wheel repair-wheel release-dist dist-check publish release version pip-check wheel-smoke
+.PHONY: all bridge build install install-dev fake-bridge ds4-bridge format format-python format-cpp lint lint-python lint-cpp lint-cpp-format lint-cpp-tidy lint-cpp-cppcheck cmake-cpp-lint test test-python test-cpp test-cpp-sanitizers tests mypy typecheck release-tools clean-dist sdist wheel dist release-sdist release-wheel audit-wheel repair-wheel repair-cuda-wheel release-dist dist-check publish release version pip-check wheel-smoke
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python)
 PIP ?= $(PYTHON) -m pip
@@ -36,7 +36,9 @@ DIST_DIR ?= dist
 REPAIRED_DIST_DIR ?= wheelhouse
 RELEASE_BUILD_DIR ?= build/release/$(if $(PYDS4_BACKEND),$(PYDS4_BACKEND),auto)-fake$(PYDS4_USE_FAKE_DS4)/{wheel_tag}
 WHEEL ?= $(DIST_DIR)/pyds4-*.whl
-MANYLINUX_PLAT ?= manylinux_2_28_x86_64
+MANYLINUX_PLAT ?= manylinux_2_38_x86_64
+AUDITWHEEL_REPAIR_ARGS ?=
+CUDA_AUDITWHEEL_REPAIR_ARGS ?= --exclude libcudart.so.12 --exclude libcublas.so.12 --exclude libcublasLt.so.12
 SMOKE_WHEEL = $(firstword $(wildcard $(WHEEL)))
 SMOKE_BACKEND ?=
 SMOKE_EXPECT_AVAILABLE ?=
@@ -200,7 +202,10 @@ repair-wheel:
 	}
 	$(MAKE) audit-wheel
 	mkdir -p "$(REPAIRED_DIST_DIR)"
-	$(AUDITWHEEL) repair --plat "$(MANYLINUX_PLAT)" --wheel-dir "$(REPAIRED_DIST_DIR)" $(WHEEL)
+	$(AUDITWHEEL) repair $(AUDITWHEEL_REPAIR_ARGS) --plat "$(MANYLINUX_PLAT)" --wheel-dir "$(REPAIRED_DIST_DIR)" $(WHEEL)
+
+repair-cuda-wheel:
+	$(MAKE) repair-wheel AUDITWHEEL_REPAIR_ARGS="$(CUDA_AUDITWHEEL_REPAIR_ARGS)"
 
 release-dist: clean-dist
 	$(MAKE) release-sdist
