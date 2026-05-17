@@ -650,10 +650,13 @@ class AsyncSession:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         pending_text = ""
         stop_strings = cast(tuple[str, ...], generation_options.stop_strings)
-        stop_buffer_chars = max(
-            (len(stop_string) for stop_string in stop_strings),
-            default=0,
-        ) - 1
+        stop_buffer_chars = (
+            max(
+                (len(stop_string) for stop_string in stop_strings),
+                default=0,
+            )
+            - 1
+        )
 
         for _ in range(generation_options.max_new_tokens):
             try:

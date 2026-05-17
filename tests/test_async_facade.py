@@ -1344,9 +1344,7 @@ def test_async_stream_text_sampling_uses_sampling_options(
                 await session.sync([1])
                 chunks = [
                     chunk
-                    async for chunk in session.stream_text(
-                        generation_options
-                    )
+                    async for chunk in session.stream_text(generation_options)
                 ]
 
                 assert chunks == ["x", "y"]
@@ -1379,9 +1377,7 @@ def test_async_stream_text_suppresses_stop_string_within_token(
                 await session.sync([1])
                 chunks = [
                     chunk
-                    async for chunk in session.stream_text(
-                        generation_options
-                    )
+                    async for chunk in session.stream_text(generation_options)
                 ]
 
                 assert chunks == ["alpha"]
@@ -1414,9 +1410,7 @@ def test_async_stream_text_suppresses_stop_string_across_tokens(
                 await session.sync([1])
                 chunks = [
                     chunk
-                    async for chunk in session.stream_text(
-                        generation_options
-                    )
+                    async for chunk in session.stream_text(generation_options)
                 ]
 
                 assert "".join(chunks) == "alpha "

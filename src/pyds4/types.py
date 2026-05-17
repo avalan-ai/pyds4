@@ -145,9 +145,7 @@ def _validate_token_score_tuple(
     result = tuple(value)
     for item in result:
         if not isinstance(item, TokenScore):
-            raise TypeError(
-                f"{name} items must be TokenScore objects."
-            )
+            raise TypeError(f"{name} items must be TokenScore objects.")
     return result
 
 

@@ -729,9 +729,7 @@ class Ds4DiskKvCache:
                 hit_count=hit_count,
             )
             self._write_payload_and_metadata(entry, metadata, payload)
-            evicted_entries = (
-                self.evict(budget) if budget is not None else ()
-            )
+            evicted_entries = self.evict(budget) if budget is not None else ()
             return Ds4KvCacheStoreResult(
                 status="stored",
                 entry=entry,
@@ -798,9 +796,7 @@ class Ds4DiskKvCache:
                 hit_count=hit_count,
             )
             self._write_payload_and_metadata(entry, metadata, payload)
-            evicted_entries = (
-                self.evict(budget) if budget is not None else ()
-            )
+            evicted_entries = self.evict(budget) if budget is not None else ()
             return Ds4KvCacheStoreResult(
                 status="stored",
                 entry=entry,

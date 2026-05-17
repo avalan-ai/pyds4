@@ -239,11 +239,14 @@ def test_kv_cache_mismatched_metadata_invalidates_entry(
     assert different_backend.metadata_matches(metadata, [1, 2, 3], 4096) is (
         False
     )
-    assert cache.metadata_matches(
-        replace(metadata, version=DS4_KV_CACHE_VERSION + 1),
-        [1, 2, 3],
-        4096,
-    ) is False
+    assert (
+        cache.metadata_matches(
+            replace(metadata, version=DS4_KV_CACHE_VERSION + 1),
+            [1, 2, 3],
+            4096,
+        )
+        is False
+    )
 
 
 def test_kv_cache_metadata_rejects_invalid_payload_file() -> None:

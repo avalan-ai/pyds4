@@ -86,8 +86,9 @@ def test_avalan_style_tool_schema_dicts_are_accepted_without_avalan_imports(
     )
 
     assert schema.function_schema["name"] == "math.calculator"
-    assert prompt.tool_schema_text == (
-        '{"name":"math.calculator","description":"Evaluate an '
+    assert (
+        prompt.tool_schema_text
+        == '{"name":"math.calculator","description":"Evaluate an '
         'expression.","parameters":{"type":"object","properties":'
         '{"expression":{"type":"string"}}}}'
     )
@@ -222,8 +223,9 @@ def test_render_tool_calls_escapes_only_required_dsml_text() -> None:
 
 
 def test_render_tool_result_escapes_xml_text() -> None:
-    assert render_tool_result("1 < 2 && 3 > 2") == (
-        "<tool_result>1 &lt; 2 &amp;&amp; 3 &gt; 2</tool_result>"
+    assert (
+        render_tool_result("1 < 2 && 3 > 2")
+        == "<tool_result>1 &lt; 2 &amp;&amp; 3 &gt; 2</tool_result>"
     )
 
 
@@ -247,8 +249,9 @@ def test_parse_generated_dsml_extracts_content_calls_and_raw() -> None:
     assert parsed.status is DsmlParseStatus.COMPLETE
     assert parsed.content == "I will calculate."
     assert parsed.reasoning == "Need math."
-    assert parsed.raw_dsml == (
-        "\n\n<｜DSML｜tool_calls>\n"
+    assert (
+        parsed.raw_dsml
+        == "\n\n<｜DSML｜tool_calls>\n"
         '<｜DSML｜invoke name="math.calculator">\n'
         '<｜DSML｜parameter name="expression" string="true">'
         "2 > 1 && echo &"
@@ -274,19 +277,24 @@ def test_parse_generated_dsml_extracts_content_calls_and_raw() -> None:
     ("text", "arguments"),
     [
         (
-            "<DSML｜tool_calls>\n"
-            '<DSML｜invoke name="math.calculator">\n'
-            '<DSML｜parameter name="x" string="false">1</DSML｜parameter>\n'
-            "</DSML｜invoke>\n"
-            "</DSML｜tool_calls>",
+            (
+                "<DSML｜tool_calls>\n"
+                '<DSML｜invoke name="math.calculator">\n'
+                '<DSML｜parameter name="x" string="false">1'
+                "</DSML｜parameter>\n"
+                "</DSML｜invoke>\n"
+                "</DSML｜tool_calls>"
+            ),
             {"x": 1},
         ),
         (
-            "<tool_calls>\n"
-            '<invoke name="math.calculator">\n'
-            '<parameter name="x" string="true">1</parameter>\n'
-            "</invoke>\n"
-            "</tool_calls>",
+            (
+                "<tool_calls>\n"
+                '<invoke name="math.calculator">\n'
+                '<parameter name="x" string="true">1</parameter>\n'
+                "</invoke>\n"
+                "</tool_calls>"
+            ),
             {"x": "1"},
         ),
     ],
@@ -413,9 +421,9 @@ def test_parse_generated_dsml_reports_incomplete_blocks() -> None:
     assert parsed.status is DsmlParseStatus.INCOMPLETE
     assert parsed.content == "answer"
     assert parsed.calls == ()
-    assert parsed.raw_dsml == (
-        "\n\n<｜DSML｜tool_calls>\n"
-        '<｜DSML｜invoke name="math.calculator">'
+    assert (
+        parsed.raw_dsml
+        == '\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="math.calculator">'
     )
     assert parsed.error == "missing closing tool_calls tag"
 
@@ -424,33 +432,41 @@ def test_parse_generated_dsml_reports_incomplete_blocks() -> None:
     ("text", "error_match"),
     [
         (
-            "<｜DSML｜tool_calls>\n"
-            '<｜DSML｜invoke name="math.calculator">\n'
-            "</｜DSML｜tool_calls>",
+            (
+                "<｜DSML｜tool_calls>\n"
+                '<｜DSML｜invoke name="math.calculator">\n'
+                "</｜DSML｜tool_calls>"
+            ),
             "missing a close tag",
         ),
         (
-            "<｜DSML｜tool_calls>\n"
-            '<｜DSML｜invoke name="math.calculator">\n'
-            '<｜DSML｜parameter name="precision" string="false">{bad}'
-            "</｜DSML｜parameter>\n"
-            "</｜DSML｜invoke>\n"
-            "</｜DSML｜tool_calls>",
+            (
+                "<｜DSML｜tool_calls>\n"
+                '<｜DSML｜invoke name="math.calculator">\n'
+                '<｜DSML｜parameter name="precision" string="false">{bad}'
+                "</｜DSML｜parameter>\n"
+                "</｜DSML｜invoke>\n"
+                "</｜DSML｜tool_calls>"
+            ),
             "malformed JSON",
         ),
         (
-            "<｜DSML｜tool_calls>\n"
-            "<｜DSML｜invoke>\n"
-            "</｜DSML｜invoke>\n"
-            "</｜DSML｜tool_calls>",
+            (
+                "<｜DSML｜tool_calls>\n"
+                "<｜DSML｜invoke>\n"
+                "</｜DSML｜invoke>\n"
+                "</｜DSML｜tool_calls>"
+            ),
             "missing a name",
         ),
         (
-            "<｜DSML｜tool_calls>\n"
-            '<｜DSML｜invoke name="math.calculator">\n'
-            "<｜DSML｜parameter>2</｜DSML｜parameter>\n"
-            "</｜DSML｜invoke>\n"
-            "</｜DSML｜tool_calls>",
+            (
+                "<｜DSML｜tool_calls>\n"
+                '<｜DSML｜invoke name="math.calculator">\n'
+                "<｜DSML｜parameter>2</｜DSML｜parameter>\n"
+                "</｜DSML｜invoke>\n"
+                "</｜DSML｜tool_calls>"
+            ),
             "parameter tag is missing a name",
         ),
     ],

@@ -123,9 +123,7 @@ def _normalize_json_value(name: str, value: object) -> JsonValue:
     if isinstance(value, Mapping):
         return _normalize_json_object(name, value)
     if isinstance(value, list | tuple):
-        return [
-            _normalize_json_value(f"{name} item", item) for item in value
-        ]
+        return [_normalize_json_value(f"{name} item", item) for item in value]
     raise TypeError(f"{name} must be JSON-serializable.")
 
 
@@ -149,9 +147,7 @@ def _function_schema_from_schema(schema: JsonObject) -> JsonObject:
 
     function_schema = schema.get("function")
     if not isinstance(function_schema, dict):
-        raise ValueError(
-            "tool schema function payload must be a JSON object."
-        )
+        raise ValueError("tool schema function payload must be a JSON object.")
     return function_schema
 
 
@@ -162,9 +158,7 @@ def _validate_tool_schema(name: str, schema: JsonObject) -> JsonObject:
     function_schema = _function_schema_from_schema(schema)
     function_name = function_schema.get("name")
     if not isinstance(function_name, str) or not function_name:
-        raise ValueError(
-            f"{name} must include a non-empty function name."
-        )
+        raise ValueError(f"{name} must include a non-empty function name.")
 
     parameters = function_schema.get("parameters")
     if parameters is not None and not isinstance(parameters, dict):
@@ -336,9 +330,11 @@ def normalize_tool_schemas(
         )
 
     result = tuple(
-        schema
-        if isinstance(schema, DsmlToolSchema)
-        else DsmlToolSchema(schema)
+        (
+            schema
+            if isinstance(schema, DsmlToolSchema)
+            else DsmlToolSchema(schema)
+        )
         for schema in schemas
     )
     return result
@@ -440,7 +436,8 @@ def render_prompt(
     chat_messages = tuple(
         message
         for message in messages
-        if message.role not in {
+        if message.role
+        not in {
             DsmlMessageRole.DEVELOPER,
             DsmlMessageRole.SYSTEM,
         }
@@ -470,7 +467,8 @@ def render_prompt(
         (
             index
             for index, message in enumerate(chat_messages)
-            if message.role in {
+            if message.role
+            in {
                 DsmlMessageRole.USER,
                 DsmlMessageRole.TOOL,
             }
@@ -779,8 +777,10 @@ def _parse_parameters(block: str) -> tuple[JsonObject, str | None]:
             except (json.JSONDecodeError, TypeError, ValueError) as error:
                 return (
                     arguments,
-                    f"parameter {parameter_name!r} contains malformed JSON: "
-                    f"{error}",
+                    (
+                        f"parameter {parameter_name!r} contains malformed"
+                        f" JSON: {error}"
+                    ),
                 )
         else:
             value = html.unescape(raw_value)
@@ -807,8 +807,7 @@ def _parameter_end_after(text: str, index: int) -> int:
 
 def _parse_attrs(text: str) -> dict[str, str]:
     return {
-        name: html.unescape(value)
-        for name, value in _ATTR_RE.findall(text)
+        name: html.unescape(value) for name, value in _ATTR_RE.findall(text)
     }
 
 
@@ -844,9 +843,7 @@ def _escape_attr(value: str) -> str:
 
 def _escape_text(value: str) -> str:
     return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     )
 
 
